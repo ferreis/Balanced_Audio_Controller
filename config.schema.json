@@ -1,0 +1,36 @@
+{
+  "type": "object",
+  "properties": {
+    "normalize": {
+      "type": "boolean",
+      "title": "Normalização de loudness",
+      "description": "Usa FFmpeg loudnorm (EBU R128) no MPV para aproximar os áudios do mesmo loudness percebido."
+    },
+    "loudness_target": {
+      "type": "number",
+      "minimum": -50,
+      "maximum": -20,
+      "title": "Loudness integrado alvo (LUFS)",
+      "description": "Valor mais próximo de -20 soa mais alto; valor mais próximo de -50 soa mais baixo. Padrão: -24 LUFS."
+    },
+    "dual_mono": {
+      "type": "boolean",
+      "title": "Tratar mono como dual-mono",
+      "description": "Compensa a medição EBU R128 de arquivos mono destinados a reprodução estéreo."
+    },
+    "speed": {
+      "type": "number",
+      "minimum": 0.25,
+      "maximum": 2.0,
+      "title": "Velocidade inicial",
+      "default": 1.0,
+      "description": "Velocidade padrão de reprodução. Valor padrão: 1.0x."
+    },
+    "volume": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "title": "Volume inicial"
+    }
+  }
+}
