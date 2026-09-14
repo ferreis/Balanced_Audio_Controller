@@ -15,6 +15,7 @@ A v0.4 troca o nivelamento dinâmico anterior pelo filtro `loudnorm` do FFmpeg d
 A normalização é aplicada durante a reprodução e não modifica os arquivos de mídia do deck.
 
 ## Interface
+<img width="233" height="349" alt="image" src="https://github.com/user-attachments/assets/77ca8035-09e4-4e7c-bac7-593ddb79139b" />
 
 Todo o controle agora fica no mesmo componente lateral arrastável. Duplo clique na barra `Áudio` restaura a posição padrão.
 
