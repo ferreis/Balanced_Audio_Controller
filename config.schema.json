@@ -3,8 +3,8 @@
   "properties": {
     "normalize": {
       "type": "boolean",
-      "title": "Normalização de loudness",
-      "description": "Usa FFmpeg loudnorm (EBU R128) no MPV para aproximar os áudios do mesmo loudness percebido."
+      "title": "Normalização de loudness em tempo real",
+      "description": "Usa FFmpeg loudnorm (EBU R128) no MPV para aproximar os áudios do mesmo loudness percebido durante a reprodução."
     },
     "loudness_target": {
       "type": "number",
@@ -31,6 +31,11 @@
       "minimum": 0,
       "maximum": 1,
       "title": "Volume inicial"
+    },
+    "deck_profile_enabled": {
+      "type": "boolean",
+      "title": "Usar perfil de normalização do deck",
+      "description": "Quando existe um perfil analisado compatível com o alvo atual, aplica o ganho calculado para cada arquivo de áudio."
     }
   }
 }
