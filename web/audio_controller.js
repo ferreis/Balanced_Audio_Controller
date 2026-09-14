@@ -25,77 +25,87 @@
       requestAnimationFrame(() => this.restoreSidePanelPosition());
     },
 
+    t(key, values = {}) {
+      const dictionary = this.config?.i18n || {};
+      const template = dictionary[key] || key;
+      return String(template).replace(/\{(\w+)\}/g, (_match, name) =>
+        Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : `{${name}}`
+      );
+    },
+
     render() {
       if (!this.root) return;
+      const t = (key, values) => this.t(key, values);
+
       this.root.innerHTML = `
-        <aside class="fac-side-panel" aria-label="Controle de áudio">
-          <div class="fac-side-handle" title="Arraste para mover. Clique duas vezes para restaurar a posição.">
+        <aside class="fac-side-panel" aria-label="${t("audio_control_aria")}">
+          <div class="fac-side-handle" title="${t("drag_hint")}">
             <span class="fac-drag-dots">⠿</span>
-            <span>Áudio</span>
+            <span>${t("audio")}</span>
           </div>
 
           <div class="fac-side-body">
             <section class="fac-block">
               <div class="fac-row fac-row-label">
-                <span>Velocidade</span>
+                <span>${t("speed")}</span>
               </div>
               <div class="fac-speed-control">
-                <button class="fac-speed-step fac-speed-down" type="button" title="Diminuir 0,5x" aria-label="Diminuir velocidade em 0,5x">−</button>
-                <label class="fac-speed-center" aria-label="Velocidade de reprodução">
+                <button class="fac-speed-step fac-speed-down" type="button" title="${t("decrease_speed")}" aria-label="${t("decrease_speed")}">−</button>
+                <label class="fac-speed-center" aria-label="${t("playback_speed")}">
                   <span class="fac-speed-value-group">
-                    <input class="fac-speed" type="number" min="0.25" max="2" step="0.05" inputmode="decimal" title="Velocidade de reprodução">
+                    <input class="fac-speed" type="number" min="0.25" max="2" step="0.05" inputmode="decimal" title="${t("playback_speed")}">
                     <span class="fac-speed-unit">x</span>
                   </span>
                 </label>
-                <button class="fac-speed-step fac-speed-up" type="button" title="Aumentar 0,5x" aria-label="Aumentar velocidade em 0,5x">+</button>
+                <button class="fac-speed-step fac-speed-up" type="button" title="${t("increase_speed")}" aria-label="${t("increase_speed")}">+</button>
               </div>
             </section>
 
             <section class="fac-block">
               <div class="fac-row fac-row-label">
-                <span>Volume</span>
+                <span>${t("volume")}</span>
                 <span class="fac-volume-value"></span>
               </div>
-              <input class="fac-volume" type="range" min="0" max="100" step="1" title="Volume de saída">
+              <input class="fac-volume" type="range" min="0" max="100" step="1" title="${t("output_volume")}">
             </section>
 
             <section class="fac-block fac-normalization-block">
-              <label class="fac-check-row" title="Normalizar o loudness percebido em tempo real usando FFmpeg loudnorm / EBU R128">
+              <label class="fac-check-row" title="${t("realtime_normalization_hint")}">
                 <input class="fac-normalize" type="checkbox">
-                <span>Normalização em tempo real</span>
+                <span>${t("realtime_normalization")}</span>
               </label>
 
               <div class="fac-normalization-settings">
                 <div class="fac-row fac-row-label">
-                  <span>Loudness alvo</span>
+                  <span>${t("target_loudness")}</span>
                   <span class="fac-loudness-value"></span>
                 </div>
-                <input class="fac-loudness" type="range" min="-50" max="-20" step="1" title="Loudness integrado alvo em LUFS">
+                <input class="fac-loudness" type="range" min="-50" max="-20" step="1" title="${t("target_loudness_hint")}">
                 <div class="fac-range-hint"><span>-50</span><span>-20 LUFS</span></div>
 
-                <label class="fac-check-row fac-dual-mono-wrap" title="Compensa a medição de arquivos mono quando serão ouvidos em saída estéreo">
+                <label class="fac-check-row fac-dual-mono-wrap" title="${t("dual_mono_hint")}">
                   <input class="fac-dual-mono" type="checkbox">
-                  <span>Tratar mono como dual-mono</span>
+                  <span>${t("dual_mono")}</span>
                 </label>
               </div>
             </section>
 
             <section class="fac-block fac-deck-profile-block">
               <div class="fac-row fac-row-label fac-deck-title-row">
-                <span>Perfil do deck</span>
-                <span class="fac-deck-badge">Não analisado</span>
+                <span>${t("deck_profile")}</span>
+                <span class="fac-deck-badge">${t("not_analyzed")}</span>
               </div>
 
               <div class="fac-deck-name" title=""></div>
 
-              <label class="fac-check-row fac-deck-enable-wrap" title="Usa o ganho medido para cada arquivo do deck. O perfil tem prioridade sobre a normalização em tempo real.">
+              <label class="fac-check-row fac-deck-enable-wrap" title="${t("use_analyzed_profile_hint")}">
                 <input class="fac-deck-enable" type="checkbox">
-                <span>Usar perfil analisado</span>
+                <span>${t("use_analyzed_profile")}</span>
               </label>
 
               <div class="fac-deck-actions">
-                <button class="fac-action fac-analyze-deck" type="button">Analisar deck</button>
-                <button class="fac-action fac-action-secondary fac-clear-deck" type="button">Limpar</button>
+                <button class="fac-action fac-analyze-deck" type="button">${t("analyze_deck")}</button>
+                <button class="fac-action fac-action-secondary fac-clear-deck" type="button">${t("clear")}</button>
               </div>
 
               <div class="fac-deck-progress" hidden>
@@ -108,7 +118,7 @@
               <div class="fac-deck-summary"></div>
             </section>
 
-            <span class="fac-status">Player nativo do Anki</span>
+            <span class="fac-status">${t("native_player")}</span>
           </div>
         </aside>
       `;
@@ -188,7 +198,12 @@
       });
 
       this.root.querySelector(".fac-analyze-deck").addEventListener("click", () => {
-        this.updateDeckProfile({ ...(this.config.deck_profile || {}), analyzing: true, progress: 0, message: "Preparando análise..." });
+        this.updateDeckProfile({
+          ...(this.config.deck_profile || {}),
+          analyzing: true,
+          progress: 0,
+          message: this.t("preparing_analysis"),
+        });
         pycmd("ferreis_audio:deck:analyze");
       });
 
@@ -203,7 +218,7 @@
     setStatus(text) {
       const status = this.root?.querySelector(".fac-status");
       if (status) {
-        status.textContent = text || "Player nativo do Anki";
+        status.textContent = text || this.t("native_player");
         status.title = status.textContent;
       }
     },
@@ -250,7 +265,7 @@
       const progressText = this.root.querySelector(".fac-deck-progress-text");
 
       if (name) {
-        name.textContent = profile.deck_name || "Deck atual";
+        name.textContent = profile.deck_name || this.t("current_deck");
         name.title = name.textContent;
       }
       if (enable) {
@@ -263,16 +278,16 @@
       if (badge) {
         badge.classList.remove("fac-badge-ok", "fac-badge-warn", "fac-badge-busy");
         if (profile.analyzing) {
-          badge.textContent = "Analisando";
+          badge.textContent = this.t("analyzing");
           badge.classList.add("fac-badge-busy");
         } else if (profile.exists && profile.stale) {
-          badge.textContent = "Reanalisar";
+          badge.textContent = this.t("reanalyze");
           badge.classList.add("fac-badge-warn");
         } else if (profile.exists) {
-          badge.textContent = "Pronto";
+          badge.textContent = this.t("ready");
           badge.classList.add("fac-badge-ok");
         } else {
-          badge.textContent = "Não analisado";
+          badge.textContent = this.t("not_analyzed");
         }
       }
 
@@ -286,16 +301,16 @@
           summary.textContent = profile.error;
           summary.className = "fac-deck-summary fac-deck-error";
         } else if (profile.exists) {
-          const parts = [`${profile.file_count || 0} áudio(s)`];
+          const parts = [this.t("audio_count", { count: profile.file_count || 0 })];
           if (Number.isFinite(Number(profile.min_lufs)) && Number.isFinite(Number(profile.max_lufs))) {
             parts.push(`${Number(profile.min_lufs).toFixed(1)} a ${Number(profile.max_lufs).toFixed(1)} LUFS`);
           }
-          if (profile.failed_count) parts.push(`${profile.failed_count} falha(s)`);
-          if (profile.stale) parts.push("alvo mudou");
+          if (profile.failed_count) parts.push(this.t("failure_count", { count: profile.failed_count }));
+          if (profile.stale) parts.push(this.t("target_changed"));
           summary.textContent = profile.message || parts.join(" · ");
           summary.className = "fac-deck-summary";
         } else {
-          summary.textContent = profile.message || "Analise o deck para calcular um ganho específico para cada áudio.";
+          summary.textContent = profile.message || this.t("deck_summary_empty");
           summary.className = "fac-deck-summary";
         }
       }
