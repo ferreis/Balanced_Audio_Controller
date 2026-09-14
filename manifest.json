@@ -1,6 +1,6 @@
 {
   "package": "ferreis_audio_controller",
   "name": "Balanced Audio Controller",
-  "human_version": "0.6.1",
+  "human_version": "0.7.0",
   "conflicts": []
 }
