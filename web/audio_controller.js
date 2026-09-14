@@ -303,7 +303,10 @@
         } else if (profile.exists) {
           const parts = [this.t("audio_count", { count: profile.file_count || 0 })];
           if (Number.isFinite(Number(profile.min_lufs)) && Number.isFinite(Number(profile.max_lufs))) {
-            parts.push(`${Number(profile.min_lufs).toFixed(1)} a ${Number(profile.max_lufs).toFixed(1)} LUFS`);
+            parts.push(this.t("loudness_range", {
+              min: Number(profile.min_lufs).toFixed(1),
+              max: Number(profile.max_lufs).toFixed(1),
+            }));
           }
           if (profile.failed_count) parts.push(this.t("failure_count", { count: profile.failed_count }));
           if (profile.stale) parts.push(this.t("target_changed"));
