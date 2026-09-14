@@ -3,5 +3,6 @@
   "loudness_target": -24,
   "dual_mono": false,
   "speed": 1.0,
-  "volume": 1.0
+  "volume": 1.0,
+  "deck_profile_enabled": false
 }
