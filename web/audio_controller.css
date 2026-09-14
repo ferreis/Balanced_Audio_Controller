@@ -33,6 +33,7 @@
   background: rgba(106, 169, 255, 0.20);
 }
 
+/* Único componente visual: painel lateral independente e arrastável. */
 #ferreis-audio-controller .fac-side-panel {
   position: fixed;
   right: 14px;
@@ -153,9 +154,11 @@
 }
 
 #ferreis-audio-controller .fac-speed-input-wrap {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 100%;
   min-width: 0;
   height: 34px;
   background: rgba(0, 0, 0, 0.08);
@@ -163,16 +166,16 @@
 
 #ferreis-audio-controller .fac-speed {
   box-sizing: border-box;
-  width: 58px;
+  width: 100%;
   min-width: 0;
   height: 32px;
-  padding: 0 2px 0 4px;
+  padding: 0 28px;
   border: 0;
   outline: none;
   background: transparent;
   color: var(--fac-text);
   font-variant-numeric: tabular-nums;
-  text-align: right;
+  text-align: center;
   -moz-appearance: textfield;
 }
 
@@ -181,14 +184,15 @@
 }
 
 #ferreis-audio-controller .fac-speed-suffix {
-  position: static;
-  flex: 0 0 auto;
-  margin-left: 2px;
+  position: absolute;
+  top: 50%;
+  right: 10px;
   color: var(--fac-muted);
   pointer-events: none;
-  transform: none;
+  transform: translateY(-50%);
 }
 
+/* Chromium/WebEngine: remove as setas nativas para manter o controle limpo. */
 #ferreis-audio-controller .fac-speed::-webkit-inner-spin-button,
 #ferreis-audio-controller .fac-speed::-webkit-outer-spin-button {
   margin: 0;
