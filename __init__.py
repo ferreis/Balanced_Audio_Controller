@@ -16,6 +16,8 @@ from aqt import gui_hooks, mw
 from aqt.sound import av_player
 from aqt.webview import WebContent
 
+from .i18n import resolve_language, t, web_strings
+
 AUDIO_EXTENSIONS = {
     "3gp",
     "flac",
@@ -41,6 +43,11 @@ _ANALYSIS_RUNNING: set[str] = set()
 
 def _config() -> dict[str, Any]:
     return mw.addonManager.getConfig(__name__) or {}
+
+
+def _language(conf: dict[str, Any] | None = None) -> str:
+    current = conf if conf is not None else _config()
+    return resolve_language(current.get("language", "auto"))
 
 
 def _save_setting(key: str, value: Any) -> None:
@@ -182,7 +189,9 @@ def _profile_matches_config(profile: dict[str, Any], conf: dict[str, Any]) -> bo
     )
 
 
-def _profile_entry_for_current_deck(filename: str | None, conf: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+def _profile_entry_for_current_deck(
+    filename: str | None, conf: dict[str, Any]
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     if not filename or not bool(conf.get("deck_profile_enabled", False)):
         return None, None
 
@@ -198,12 +207,15 @@ def _profile_entry_for_current_deck(filename: str | None, conf: dict[str, Any]) 
     return profile, entry if isinstance(entry, dict) else None
 
 
-def _apply_native_settings(player: Any | None = None, filename: str | None = None) -> tuple[bool, str]:
+def _apply_native_settings(
+    player: Any | None = None, filename: str | None = None
+) -> tuple[bool, str]:
+    conf = _config()
+    lang = _language(conf)
     player = player or av_player.current_player
     if not _is_mpv_player(player):
-        return False, "Player nativo sem controle MPV"
+        return False, t(lang, "status_native_no_mpv")
 
-    conf = _config()
     speed = max(0.25, min(2.0, float(conf.get("speed", 1.0))))
     volume = max(0.0, min(1.0, float(conf.get("volume", 1.0))))
     normalize = bool(conf.get("normalize", True))
@@ -214,7 +226,7 @@ def _apply_native_settings(player: Any | None = None, filename: str | None = Non
         player.set_property("volume", volume * 100.0)
     except Exception as exc:
         print("[Balanced Audio Controller] unable to set MPV speed/volume:", exc)
-        return False, "Não foi possível controlar o MPV"
+        return False, t(lang, "status_mpv_control_failed")
 
     _remove_filter(player, NORMALIZE_FILTER_NAME)
     _remove_filter(player, DECK_GAIN_FILTER_NAME)
@@ -224,24 +236,37 @@ def _apply_native_settings(player: Any | None = None, filename: str | None = Non
         try:
             gain_db = float(entry.get("gain_db", 0.0))
             player.command("af", "add", _deck_gain_filter(gain_db))
-            return True, f"Perfil do deck · {gain_db:+.1f} dB"
+            return True, t(lang, "status_deck_profile_gain", gain=gain_db)
         except Exception as exc:
             print("[Balanced Audio Controller] unable to apply deck gain:", exc)
 
-    if profile and bool(conf.get("deck_profile_enabled", False)) and not _profile_matches_config(profile, conf):
-        profile_note = "Perfil desatualizado; "
+    if (
+        profile
+        and bool(conf.get("deck_profile_enabled", False))
+        and not _profile_matches_config(profile, conf)
+    ):
+        profile_note = t(lang, "status_profile_stale_prefix")
     else:
         profile_note = ""
 
     if normalize:
         try:
             player.command("af", "add", _normalizer_filter(conf))
-            return True, f"{profile_note}normalização em tempo real · {target:.0f} LUFS"
+            return True, t(
+                lang,
+                "status_realtime_normalization",
+                prefix=profile_note,
+                target=target,
+            )
         except Exception as exc:
             print("[Balanced Audio Controller] loudnorm unavailable:", exc)
-            return True, f"{profile_note}velocidade/volume ativos; loudnorm indisponível"
+            return True, t(
+                lang,
+                "status_loudnorm_unavailable",
+                prefix=profile_note,
+            )
 
-    return True, f"{profile_note}normalização desligada"
+    return True, t(lang, "status_normalization_off", prefix=profile_note)
 
 
 def _tag_filename(tag: Any) -> str | None:
@@ -363,7 +388,9 @@ def _parse_loudnorm_json(stderr: str) -> dict[str, float] | None:
         return None
 
 
-def _measure_loudness(ffmpeg: str, path: Path, target: float, dual_mono: bool) -> dict[str, float] | None:
+def _measure_loudness(
+    ffmpeg: str, path: Path, target: float, dual_mono: bool
+) -> dict[str, float] | None:
     filter_spec = (
         f"loudnorm=I={target:.1f}:TP={TRUE_PEAK_LIMIT:.1f}:LRA={LRA_TARGET:.0f}:"
         f"dual_mono={'true' if dual_mono else 'false'}:print_format=json"
@@ -419,9 +446,17 @@ def _start_deck_analysis(context: aqt.reviewer.Reviewer) -> None:
     if not card:
         return
 
+    conf = _config()
+    lang = _language(conf)
     deck_id = _card_deck_id(card)
+
     if _analysis_is_running(deck_id):
-        _push_deck_profile_state({**_deck_profile_summary(deck_id), "message": "Análise já está em andamento."})
+        _push_deck_profile_state(
+            {
+                **_deck_profile_summary(deck_id),
+                "message": t(lang, "analysis_already_running"),
+            }
+        )
         return
 
     ffmpeg = _find_ffmpeg()
@@ -429,7 +464,7 @@ def _start_deck_analysis(context: aqt.reviewer.Reviewer) -> None:
         _push_deck_profile_state(
             {
                 **_deck_profile_summary(deck_id),
-                "error": "FFmpeg não encontrado. Instale o FFmpeg para analisar o deck.",
+                "error": t(lang, "ffmpeg_not_found"),
             }
         )
         return
@@ -439,7 +474,10 @@ def _start_deck_analysis(context: aqt.reviewer.Reviewer) -> None:
     except Exception as exc:
         print("[Balanced Audio Controller] unable to collect deck audio:", exc)
         _push_deck_profile_state(
-            {**_deck_profile_summary(deck_id), "error": "Não foi possível listar os áudios do deck."}
+            {
+                **_deck_profile_summary(deck_id),
+                "error": t(lang, "deck_audio_list_failed"),
+            }
         )
         return
 
@@ -447,12 +485,11 @@ def _start_deck_analysis(context: aqt.reviewer.Reviewer) -> None:
         _push_deck_profile_state(
             {
                 **_deck_profile_summary(deck_id, deck_name),
-                "error": "Nenhum arquivo de áudio foi encontrado neste deck.",
+                "error": t(lang, "deck_no_audio"),
             }
         )
         return
 
-    conf = _config()
     target = max(-50.0, min(-20.0, float(conf.get("loudness_target", -24.0))))
     dual_mono = bool(conf.get("dual_mono", False))
     media_dir = Path(mw.col.media.dir())
@@ -466,7 +503,7 @@ def _start_deck_analysis(context: aqt.reviewer.Reviewer) -> None:
             "processed": 0,
             "total": total,
             "progress": 0,
-            "message": f"Analisando 0/{total}...",
+            "message": t(lang, "analysis_progress", processed=0, total=total),
         }
     )
 
@@ -482,7 +519,10 @@ def _start_deck_analysis(context: aqt.reviewer.Reviewer) -> None:
                 try:
                     measurement = _measure_loudness(ffmpeg, path, target, dual_mono)
                 except Exception as exc:
-                    print(f"[Balanced Audio Controller] analysis failed for {filename}:", exc)
+                    print(
+                        f"[Balanced Audio Controller] analysis failed for {filename}:",
+                        exc,
+                    )
 
             if measurement is None:
                 failed.append(filename)
@@ -490,10 +530,7 @@ def _start_deck_analysis(context: aqt.reviewer.Reviewer) -> None:
                 input_i = measurement["input_i"]
                 input_tp = measurement["input_tp"]
                 gain_db = _compute_gain_db(input_i, input_tp, target)
-                entries[filename] = {
-                    **measurement,
-                    "gain_db": gain_db,
-                }
+                entries[filename] = {**measurement, "gain_db": gain_db}
                 loudness_values.append(input_i)
 
             progress = round(index * 100 / total)
@@ -506,7 +543,12 @@ def _start_deck_analysis(context: aqt.reviewer.Reviewer) -> None:
                             "processed": i,
                             "total": total,
                             "progress": p,
-                            "message": f"Analisando {i}/{total}...",
+                            "message": t(
+                                lang,
+                                "analysis_progress",
+                                processed=i,
+                                total=total,
+                            ),
                         }
                     )
                 )
@@ -517,7 +559,9 @@ def _start_deck_analysis(context: aqt.reviewer.Reviewer) -> None:
             stats = {
                 "min_lufs": round(min(loudness_values), 2),
                 "max_lufs": round(max(loudness_values), 2),
-                "average_lufs": round(sum(loudness_values) / len(loudness_values), 2),
+                "average_lufs": round(
+                    sum(loudness_values) / len(loudness_values), 2
+                ),
             }
         else:
             stats = {"min_lufs": None, "max_lufs": None, "average_lufs": None}
@@ -552,7 +596,11 @@ def _start_deck_analysis(context: aqt.reviewer.Reviewer) -> None:
                     "progress": 100,
                     "processed": total,
                     "total": total,
-                    "message": f"Perfil criado para {profile['file_count']} áudio(s).",
+                    "message": t(
+                        lang,
+                        "profile_created",
+                        count=profile["file_count"],
+                    ),
                 }
             )
             _push_deck_profile_state(state)
@@ -562,7 +610,7 @@ def _start_deck_analysis(context: aqt.reviewer.Reviewer) -> None:
                 {
                     **_deck_profile_summary(deck_id, deck_name),
                     "analyzing": False,
-                    "error": "Falha ao analisar o deck.",
+                    "error": t(lang, "analysis_failed"),
                 }
             )
 
@@ -580,13 +628,18 @@ def _on_card_will_show(text: str, card, kind: str) -> str:
         return text
 
     conf = _config()
+    lang = _language(conf)
     deck_id = _card_deck_id(card)
     deck_name = _deck_name(deck_id)
     payload = {
+        "language": lang,
+        "i18n": web_strings(lang),
         "speed": max(0.25, min(2.0, float(conf.get("speed", 1.0)))),
         "volume": max(0.0, min(1.0, float(conf.get("volume", 1.0)))),
         "normalize": bool(conf.get("normalize", True)),
-        "loudness_target": max(-50.0, min(-20.0, float(conf.get("loudness_target", -24.0)))),
+        "loudness_target": max(
+            -50.0, min(-20.0, float(conf.get("loudness_target", -24.0)))
+        ),
         "dual_mono": bool(conf.get("dual_mono", False)),
         "deck_profile": _deck_profile_summary(deck_id, deck_name),
     }
@@ -603,7 +656,9 @@ setTimeout(function() {{
     return text + controller
 
 
-def _on_webview_will_set_content(web_content: WebContent, context: object | None) -> None:
+def _on_webview_will_set_content(
+    web_content: WebContent, context: object | None
+) -> None:
     if not isinstance(context, aqt.reviewer.Reviewer):
         return
     addon_package = mw.addonManager.addonFromModule(__name__)
