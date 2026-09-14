@@ -39,12 +39,14 @@
               <div class="fac-row fac-row-label">
                 <span>Velocidade</span>
               </div>
-              <div class="fac-speed-controls">
+              <div class="fac-speed-control">
                 <button class="fac-speed-step fac-speed-down" type="button" title="Diminuir 0,5x" aria-label="Diminuir velocidade em 0,5x">−</button>
-                <div class="fac-speed-input-wrap">
-                  <input class="fac-speed" type="number" min="0.25" max="2" step="0.05" inputmode="decimal" title="Velocidade de reprodução">
-                  <span class="fac-speed-suffix">x</span>
-                </div>
+                <label class="fac-speed-center" aria-label="Velocidade de reprodução">
+                  <span class="fac-speed-value-group">
+                    <input class="fac-speed" type="number" min="0.25" max="2" step="0.05" inputmode="decimal" title="Velocidade de reprodução">
+                    <span class="fac-speed-unit">x</span>
+                  </span>
+                </label>
                 <button class="fac-speed-step fac-speed-up" type="button" title="Aumentar 0,5x" aria-label="Aumentar velocidade em 0,5x">+</button>
               </div>
             </section>
@@ -86,6 +88,7 @@
       const speed = this.root.querySelector(".fac-speed");
       const requestedSpeed = clamp(Number(this.config.speed || 1), 0.25, 2);
       speed.value = this.formatSpeed(requestedSpeed);
+      this.syncSpeedInputWidth(speed);
 
       const volume = this.root.querySelector(".fac-volume");
       volume.value = String(Math.round(clamp(Number(this.config.volume ?? 1), 0, 1) * 100));
@@ -109,10 +112,12 @@
         const parsed = Number(String(speed.value).replace(",", "."));
         if (!Number.isFinite(parsed)) {
           speed.value = this.formatSpeed(this.config.speed || 1);
+          this.syncSpeedInputWidth(speed);
           return;
         }
         this.setSpeed(parsed);
       };
+      speed.addEventListener("input", () => this.syncSpeedInputWidth(speed));
       speed.addEventListener("change", commitSpeedInput);
       speed.addEventListener("blur", commitSpeedInput);
       speed.addEventListener("keydown", (event) => {
@@ -163,6 +168,13 @@
       return rounded.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
     },
 
+    syncSpeedInputWidth(input) {
+      if (!input) return;
+      const text = String(input.value || "1");
+      const width = Math.max(1.4, Math.min(4.2, text.length + 0.35));
+      input.style.width = `${width}ch`;
+    },
+
     updateLoudnessValue(value) {
       const output = this.root?.querySelector(".fac-loudness-value");
       if (output) output.textContent = `${Math.round(Number(value))} LUFS`;
@@ -182,7 +194,10 @@
       value = Math.round(value * 100) / 100;
       this.config.speed = value;
       const speed = this.root?.querySelector(".fac-speed");
-      if (speed) speed.value = this.formatSpeed(value);
+      if (speed) {
+        speed.value = this.formatSpeed(value);
+        this.syncSpeedInputWidth(speed);
+      }
       pycmd(`ferreis_audio:set:speed:${value}`);
     },
 
