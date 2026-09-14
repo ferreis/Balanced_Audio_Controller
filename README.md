@@ -1,4 +1,4 @@
-# Balanced Audio Controller v0.6.0
+# Balanced Audio Controller v0.6.1
 
 Add-on experimental para Anki Desktop que mantém o player nativo do Anki/MPV e adiciona um painel flutuante arrastável para controlar:
 
@@ -35,3 +35,9 @@ Os botões originais de replay do cartão continuam sendo controlados pelo próp
 - Botões −/+ alteram a velocidade em 0,5x por clique.
 - Velocidade padrão definida explicitamente como 1.0x.
 - Mantidos os limites de 0,25x a 2,0x.
+
+## v0.6.1
+
+- Corrigido o alinhamento horizontal do valor de velocidade.
+- O valor numérico agora permanece centralizado conforme a largura do componente.
+- O sufixo `x` fica ancorado à direita sem deslocar o valor central.
