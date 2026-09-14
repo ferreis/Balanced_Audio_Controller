@@ -1,51 +1,56 @@
-# Balanced Audio Controller v0.7.0
+# Balanced Audio Controller v0.8.0-dev
 
-Add-on experimental para Anki Desktop que mantém o player nativo do Anki/MPV e adiciona um painel flutuante arrastável para controlar:
+Add-on gratuito e open source para Anki Desktop que mantém o player nativo do Anki/MPV e adiciona um painel flutuante arrastável com:
 
-- velocidade de reprodução (0.25x a 2x);
-- volume de saída (0 a 100%);
+- velocidade de reprodução de 0.25x a 2x;
+- volume de saída;
 - normalização de loudness em tempo real;
-- loudness integrado alvo (-50 a -20 LUFS, padrão -24 LUFS);
-- compensação opcional para áudio mono reproduzido em estéreo (dual-mono).
+- alvo de loudness configurável em LUFS;
+- compensação dual-mono;
+- perfil de normalização por deck.
 
-## Normalização
+## Perfil de normalização do deck
 
-A v0.4 troca o nivelamento dinâmico anterior pelo filtro `loudnorm` do FFmpeg dentro do MPV. O filtro segue o modelo EBU R128 e busca aproximar cada áudio do loudness integrado configurado. O limite de true peak é fixado em -1.5 dBTP para deixar margem contra clipping.
+A branch `dev` adiciona uma análise completa dos arquivos de áudio usados pelo deck atual.
 
-A normalização é aplicada durante a reprodução e não modifica os arquivos de mídia do deck.
+Ao clicar em **Analisar deck**, o add-on:
 
-## Interface
-<img width="233" height="349" alt="image" src="https://github.com/user-attachments/assets/77ca8035-09e4-4e7c-bac7-593ddb79139b" />
+1. localiza os arquivos de áudio usados pelos cartões do deck;
+2. mede o loudness integrado e true peak de cada arquivo com FFmpeg `loudnorm`;
+3. calcula um ganho individual para aproximar cada arquivo do alvo configurado;
+4. limita ganho positivo para respeitar o teto de true peak de -1.5 dBTP;
+5. salva o perfil em `user_files/deck_profiles.json` sem modificar os arquivos originais;
+6. aplica o ganho correspondente quando o arquivo é reproduzido pelo MPV do Anki.
 
-Todo o controle agora fica no mesmo componente lateral arrastável. Duplo clique na barra `Áudio` restaura a posição padrão.
+O perfil do deck tem prioridade para arquivos analisados. A normalização em tempo real continua disponível como fallback.
 
-Os botões originais de replay do cartão continuam sendo controlados pelo próprio Anki; o add-on não intercepta o play.
+### FFmpeg
 
-## v0.5.0
+A análise do deck precisa encontrar o executável `ffmpeg` no sistema ou próximo ao runtime do Anki. Se ele não estiver disponível, a reprodução normal continua funcionando e o painel informa que a análise não pôde ser iniciada.
 
-- Velocidade agora usa campo numérico em vez de select.
-- Botões −/+ alteram a velocidade em 0,5x por clique.
-- Campo aceita valores manuais entre 0,25x e 2,0x.
-- Botões e campo de velocidade receberam visual mais compacto e consistente.
+## Build
 
-## v0.6.0
+O formato `.ankiaddon` é um arquivo ZIP com outra extensão. Os arquivos do add-on precisam ficar na raiz do pacote.
 
-- Controle de velocidade redesenhado como um único componente segmentado.
-- Campo central continua sendo um `input` numérico.
-- Botões −/+ alteram a velocidade em 0,5x por clique.
-- Velocidade padrão definida explicitamente como 1.0x.
-- Mantidos os limites de 0,25x a 2,0x.
+Para gerar o pacote:
 
-## v0.6.1
+```bash
+python3 build.py
+```
 
-- Corrigido o alinhamento horizontal do valor de velocidade.
-- O valor numérico agora permanece centralizado conforme a largura do componente.
-- O sufixo `x` fica ancorado à direita sem deslocar o valor central.
+O resultado será criado em:
 
-## v0.7.0
+```text
+dist/Balanced_Audio_Controller-v0.8.0-dev.ankiaddon
+```
 
-- Componente de velocidade reconstruído do zero.
-- Botões − e + possuem largura fixa e simétrica.
-- Valor e sufixo `x` formam um grupo único centralizado no espaço disponível.
-- O campo numérico ajusta sua largura ao conteúdo para manter `1 x`, `0.5 x`, `1.25 x` etc. visualmente centralizados.
-- Mantido incremento/decremento de 0,5x e velocidade padrão de 1.0x.
+O script inclui os arquivos Python/configuração, `manifest.json`, README, licença e a pasta `web/`. Ele não inclui `user_files/`, `.git/`, `dist/` ou caches locais.
+
+## Desenvolvimento
+
+- `main`: versões estáveis/publicáveis.
+- `dev`: funcionalidades em desenvolvimento e testes antes de merge para `main`.
+
+## Licença
+
+MIT License.
