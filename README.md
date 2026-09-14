@@ -1,51 +1,141 @@
-# Balanced Audio Controller v0.7.0
+# Balanced Audio Controller v0.9.0
 
-Add-on experimental para Anki Desktop que mantém o player nativo do Anki/MPV e adiciona um painel flutuante arrastável para controlar:
+Free and open-source audio controller for Anki Desktop. Adds playback speed, volume, real-time loudness normalization and per-deck audio analysis while keeping Anki's native MPV player.
 
-- velocidade de reprodução (0.25x a 2x);
-- volume de saída (0 a 100%);
-- normalização de loudness em tempo real;
-- loudness integrado alvo (-50 a -20 LUFS, padrão -24 LUFS);
-- compensação opcional para áudio mono reproduzido em estéreo (dual-mono).
+Extensão gratuita e de código aberto para Anki Desktop. Adiciona controle de velocidade, volume, normalização de loudness em tempo real e análise por deck mantendo o player MPV nativo do Anki.
 
-## Normalização
+## English
 
-A v0.4 troca o nivelamento dinâmico anterior pelo filtro `loudnorm` do FFmpeg dentro do MPV. O filtro segue o modelo EBU R128 e busca aproximar cada áudio do loudness integrado configurado. O limite de true peak é fixado em -1.5 dBTP para deixar margem contra clipping.
+### Features
 
-A normalização é aplicada durante a reprodução e não modifica os arquivos de mídia do deck.
+- Playback speed from **0.25x to 2.0x**, default **1.0x**.
+- `−` / `+` change speed by **0.5x**.
+- Manual numeric speed input.
+- Output volume from **0% to 100%**.
+- Real-time FFmpeg `loudnorm` normalization through MPV.
+- Target loudness from **-50 to -20 LUFS**, default **-24 LUFS**.
+- True peak ceiling of **-1.5 dBTP** and LRA target of **7 LU**.
+- Optional dual-mono compensation.
+- Movable panel with saved position; double-click the title bar to reset it.
+- Deck normalization profile: analyzes every audio file in the current deck, calculates an individual gain, stores it in `user_files/deck_profiles.json`, and applies it on playback without modifying the original media files.
 
-## Interface
-<img width="233" height="349" alt="image" src="https://github.com/user-attachments/assets/77ca8035-09e4-4e7c-bac7-593ddb79139b" />
+### Language
 
-Todo o controle agora fica no mesmo componente lateral arrastável. Duplo clique na barra `Áudio` restaura a posição padrão.
+Supported languages: English (`en`) and Brazilian Portuguese (`pt-BR`).
 
-Os botões originais de replay do cartão continuam sendo controlados pelo próprio Anki; o add-on não intercepta o play.
+Default:
 
-## v0.5.0
+```json
+"language": "auto"
+```
 
-- Velocidade agora usa campo numérico em vez de select.
-- Botões −/+ alteram a velocidade em 0,5x por clique.
-- Campo aceita valores manuais entre 0,25x e 2,0x.
-- Botões e campo de velocidade receberam visual mais compacto e consistente.
+`auto` detects the system locale. Portuguese locales use `pt-BR`; unsupported locales fall back to English.
 
-## v0.6.0
+To change it: **Tools → Add-ons → Balanced Audio Controller → Config/Configure**, then set `language` to `auto`, `en`, or `pt-BR`.
 
-- Controle de velocidade redesenhado como um único componente segmentado.
-- Campo central continua sendo um `input` numérico.
-- Botões −/+ alteram a velocidade em 0,5x por clique.
-- Velocidade padrão definida explicitamente como 1.0x.
-- Mantidos os limites de 0,25x a 2,0x.
+### Configuration
 
-## v0.6.1
+```json
+{
+  "language": "auto",
+  "normalize": true,
+  "loudness_target": -24,
+  "dual_mono": false,
+  "speed": 1.0,
+  "volume": 1.0,
+  "deck_profile_enabled": false
+}
+```
 
-- Corrigido o alinhamento horizontal do valor de velocidade.
-- O valor numérico agora permanece centralizado conforme a largura do componente.
-- O sufixo `x` fica ancorado à direita sem deslocar o valor central.
+`normalize` enables real-time normalization. `loudness_target` selects the target LUFS. `dual_mono` compensates mono material intended for stereo playback. `speed` sets initial speed. `volume` uses a `0.0` to `1.0` scale. `deck_profile_enabled` enables the analyzed deck profile when compatible data exists.
 
-## v0.7.0
+### Deck analysis and FFmpeg
 
-- Componente de velocidade reconstruído do zero.
-- Botões − e + possuem largura fixa e simétrica.
-- Valor e sufixo `x` formam um grupo único centralizado no espaço disponível.
-- O campo numérico ajusta sua largura ao conteúdo para manter `1 x`, `0.5 x`, `1.25 x` etc. visualmente centralizados.
-- Mantido incremento/decremento de 0,5x e velocidade padrão de 1.0x.
+Click **Analyze deck** to measure integrated loudness and true peak for each audio file. The profile has priority over real-time normalization for analyzed files. Changing target LUFS or dual-mono marks the profile as outdated and it should be analyzed again.
+
+Deck analysis requires an `ffmpeg` executable available on the system. Normal Anki playback continues to work if FFmpeg is unavailable.
+
+### Build
+
+```bash
+python3 build.py
+```
+
+Output:
+
+```text
+dist/Balanced_Audio_Controller-v0.9.0.ankiaddon
+```
+
+`main` contains stable/publishable versions. `dev` contains development and testing changes.
+
+---
+
+## Português (Brasil)
+
+### Funcionalidades
+
+- Velocidade de **0,25x até 2,0x**, padrão **1,0x**.
+- `−` / `+` alteram a velocidade em **0,5x**.
+- Campo numérico para definir a velocidade manualmente.
+- Volume de saída entre **0% e 100%**.
+- Normalização em tempo real com FFmpeg `loudnorm` pelo MPV.
+- Loudness alvo de **-50 até -20 LUFS**, padrão **-24 LUFS**.
+- Limite de true peak em **-1,5 dBTP** e LRA alvo de **7 LU**.
+- Compensação dual-mono opcional.
+- Painel móvel com posição salva; clique duas vezes no título para restaurar a posição padrão.
+- Perfil de normalização do deck: analisa todos os arquivos de áudio do deck atual, calcula um ganho individual, salva em `user_files/deck_profiles.json` e aplica durante a reprodução sem modificar os arquivos originais.
+
+### Idioma
+
+Idiomas suportados: English (`en`) e Português do Brasil (`pt-BR`).
+
+Padrão:
+
+```json
+"language": "auto"
+```
+
+`auto` detecta o locale do sistema. Locales em português usam `pt-BR`; idiomas não suportados usam inglês como fallback.
+
+Para alterar: **Ferramentas → Extensões/Add-ons → Balanced Audio Controller → Configuração/Config**, depois defina `language` como `auto`, `en` ou `pt-BR`.
+
+### Configuração
+
+```json
+{
+  "language": "auto",
+  "normalize": true,
+  "loudness_target": -24,
+  "dual_mono": false,
+  "speed": 1.0,
+  "volume": 1.0,
+  "deck_profile_enabled": false
+}
+```
+
+`normalize` ativa a normalização em tempo real. `loudness_target` define o LUFS alvo. `dual_mono` compensa material mono destinado a saída estéreo. `speed` define a velocidade inicial. `volume` usa uma escala de `0.0` a `1.0`. `deck_profile_enabled` ativa o perfil analisado quando houver dados compatíveis.
+
+### Análise do deck e FFmpeg
+
+Clique em **Analisar deck** para medir loudness integrado e true peak de cada áudio. O perfil tem prioridade sobre a normalização em tempo real para arquivos analisados. Se o LUFS alvo ou dual-mono forem alterados, o perfil fica desatualizado e deve ser analisado novamente.
+
+A análise do deck precisa encontrar um executável `ffmpeg`. A reprodução normal do Anki continua funcionando se o FFmpeg não estiver disponível.
+
+### Build
+
+```bash
+python3 build.py
+```
+
+Saída:
+
+```text
+dist/Balanced_Audio_Controller-v0.9.0.ankiaddon
+```
+
+`main` contém versões estáveis/publicáveis. `dev` contém alterações em desenvolvimento e testes.
+
+## License / Licença
+
+MIT License.
