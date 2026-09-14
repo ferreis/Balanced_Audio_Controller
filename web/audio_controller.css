@@ -111,11 +111,11 @@
   white-space: nowrap;
 }
 
-#ferreis-audio-controller .fac-speed-controls {
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) 38px;
+#ferreis-audio-controller .fac-speed-control {
+  display: flex;
+  align-items: stretch;
   width: 100%;
-  min-width: 0;
+  height: 40px;
   overflow: hidden;
   border: 1px solid var(--fac-border);
   border-radius: 8px;
@@ -123,20 +123,25 @@
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
-#ferreis-audio-controller .fac-speed-controls:focus-within {
+#ferreis-audio-controller .fac-speed-control:focus-within {
   border-color: var(--fac-accent);
   box-shadow: 0 0 0 2px rgba(106, 169, 255, 0.14);
 }
 
 #ferreis-audio-controller .fac-speed-step {
-  width: 38px;
-  height: 34px;
+  flex: 0 0 42px;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 40px;
+  margin: 0;
   padding: 0;
   border: 0;
   border-radius: 0;
   background: rgba(255, 255, 255, 0.035);
-  font-size: 18px;
-  font-weight: 500;
+  color: var(--fac-text);
+  font-size: 20px;
+  font-weight: 400;
   line-height: 1;
 }
 
@@ -153,28 +158,40 @@
   background: rgba(106, 169, 255, 0.13);
 }
 
-#ferreis-audio-controller .fac-speed-input-wrap {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
+#ferreis-audio-controller .fac-speed-center {
+  flex: 1 1 auto;
+  display: grid;
+  place-items: center;
   min-width: 0;
-  height: 34px;
+  height: 40px;
+  margin: 0;
+  padding: 0;
   background: rgba(0, 0, 0, 0.08);
 }
 
+#ferreis-audio-controller .fac-speed-value-group {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
 #ferreis-audio-controller .fac-speed {
-  box-sizing: border-box;
-  width: 100%;
-  min-width: 0;
-  height: 32px;
-  padding: 0 28px;
+  box-sizing: content-box;
+  width: 1.4ch;
+  min-width: 1.4ch;
+  max-width: 4.2ch;
+  height: 24px;
+  margin: 0;
+  padding: 0;
   border: 0;
   outline: none;
   background: transparent;
   color: var(--fac-text);
   font-variant-numeric: tabular-nums;
+  line-height: 24px;
   text-align: center;
   -moz-appearance: textfield;
 }
@@ -183,16 +200,14 @@
   box-shadow: none;
 }
 
-#ferreis-audio-controller .fac-speed-suffix {
-  position: absolute;
-  top: 50%;
-  right: 10px;
+#ferreis-audio-controller .fac-speed-unit {
+  flex: 0 0 auto;
+  margin: 0;
   color: var(--fac-muted);
+  line-height: 24px;
   pointer-events: none;
-  transform: translateY(-50%);
 }
 
-/* Chromium/WebEngine: remove as setas nativas para manter o controle limpo. */
 #ferreis-audio-controller .fac-speed::-webkit-inner-spin-button,
 #ferreis-audio-controller .fac-speed::-webkit-outer-spin-button {
   margin: 0;
