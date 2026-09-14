@@ -60,9 +60,9 @@
             </section>
 
             <section class="fac-block fac-normalization-block">
-              <label class="fac-check-row" title="Normalizar o loudness percebido usando FFmpeg loudnorm / EBU R128">
+              <label class="fac-check-row" title="Normalizar o loudness percebido em tempo real usando FFmpeg loudnorm / EBU R128">
                 <input class="fac-normalize" type="checkbox">
-                <span>Normalização de loudness</span>
+                <span>Normalização em tempo real</span>
               </label>
 
               <div class="fac-normalization-settings">
@@ -78,6 +78,34 @@
                   <span>Tratar mono como dual-mono</span>
                 </label>
               </div>
+            </section>
+
+            <section class="fac-block fac-deck-profile-block">
+              <div class="fac-row fac-row-label fac-deck-title-row">
+                <span>Perfil do deck</span>
+                <span class="fac-deck-badge">Não analisado</span>
+              </div>
+
+              <div class="fac-deck-name" title=""></div>
+
+              <label class="fac-check-row fac-deck-enable-wrap" title="Usa o ganho medido para cada arquivo do deck. O perfil tem prioridade sobre a normalização em tempo real.">
+                <input class="fac-deck-enable" type="checkbox">
+                <span>Usar perfil analisado</span>
+              </label>
+
+              <div class="fac-deck-actions">
+                <button class="fac-action fac-analyze-deck" type="button">Analisar deck</button>
+                <button class="fac-action fac-action-secondary fac-clear-deck" type="button">Limpar</button>
+              </div>
+
+              <div class="fac-deck-progress" hidden>
+                <div class="fac-deck-progress-track">
+                  <div class="fac-deck-progress-bar"></div>
+                </div>
+                <span class="fac-deck-progress-text"></span>
+              </div>
+
+              <div class="fac-deck-summary"></div>
             </section>
 
             <span class="fac-status">Player nativo do Anki</span>
@@ -152,6 +180,23 @@
         pycmd(`ferreis_audio:set:dual_mono:${this.config.dual_mono ? 1 : 0}`);
       });
 
+      this.root.querySelector(".fac-deck-enable").addEventListener("change", (event) => {
+        const enabled = Boolean(event.target.checked);
+        if (!this.config.deck_profile) this.config.deck_profile = {};
+        this.config.deck_profile.enabled = enabled;
+        pycmd(`ferreis_audio:deck:enable:${enabled ? 1 : 0}`);
+      });
+
+      this.root.querySelector(".fac-analyze-deck").addEventListener("click", () => {
+        this.updateDeckProfile({ ...(this.config.deck_profile || {}), analyzing: true, progress: 0, message: "Preparando análise..." });
+        pycmd("ferreis_audio:deck:analyze");
+      });
+
+      this.root.querySelector(".fac-clear-deck").addEventListener("click", () => {
+        pycmd("ferreis_audio:deck:clear");
+      });
+
+      this.updateDeckProfile(this.config.deck_profile || {});
       this.enableSidePanelDrag();
     },
 
@@ -186,6 +231,73 @@
       if (settings) settings.classList.toggle("fac-disabled", !enabled);
       for (const element of this.root?.querySelectorAll(".fac-normalization-settings input") || []) {
         element.disabled = !enabled;
+      }
+    },
+
+    updateDeckProfile(state) {
+      if (!this.root) return;
+      this.config.deck_profile = { ...(this.config.deck_profile || {}), ...(state || {}) };
+      const profile = this.config.deck_profile;
+
+      const name = this.root.querySelector(".fac-deck-name");
+      const badge = this.root.querySelector(".fac-deck-badge");
+      const enable = this.root.querySelector(".fac-deck-enable");
+      const analyze = this.root.querySelector(".fac-analyze-deck");
+      const clear = this.root.querySelector(".fac-clear-deck");
+      const summary = this.root.querySelector(".fac-deck-summary");
+      const progressWrap = this.root.querySelector(".fac-deck-progress");
+      const progressBar = this.root.querySelector(".fac-deck-progress-bar");
+      const progressText = this.root.querySelector(".fac-deck-progress-text");
+
+      if (name) {
+        name.textContent = profile.deck_name || "Deck atual";
+        name.title = name.textContent;
+      }
+      if (enable) {
+        enable.checked = Boolean(profile.enabled);
+        enable.disabled = !profile.exists || Boolean(profile.analyzing);
+      }
+      if (analyze) analyze.disabled = Boolean(profile.analyzing);
+      if (clear) clear.disabled = !profile.exists || Boolean(profile.analyzing);
+
+      if (badge) {
+        badge.classList.remove("fac-badge-ok", "fac-badge-warn", "fac-badge-busy");
+        if (profile.analyzing) {
+          badge.textContent = "Analisando";
+          badge.classList.add("fac-badge-busy");
+        } else if (profile.exists && profile.stale) {
+          badge.textContent = "Reanalisar";
+          badge.classList.add("fac-badge-warn");
+        } else if (profile.exists) {
+          badge.textContent = "Pronto";
+          badge.classList.add("fac-badge-ok");
+        } else {
+          badge.textContent = "Não analisado";
+        }
+      }
+
+      const progress = clamp(Number(profile.progress || 0), 0, 100);
+      if (progressWrap) progressWrap.hidden = !profile.analyzing;
+      if (progressBar) progressBar.style.width = `${progress}%`;
+      if (progressText) progressText.textContent = profile.message || `${profile.processed || 0}/${profile.total || 0}`;
+
+      if (summary) {
+        if (profile.error) {
+          summary.textContent = profile.error;
+          summary.className = "fac-deck-summary fac-deck-error";
+        } else if (profile.exists) {
+          const parts = [`${profile.file_count || 0} áudio(s)`];
+          if (Number.isFinite(Number(profile.min_lufs)) && Number.isFinite(Number(profile.max_lufs))) {
+            parts.push(`${Number(profile.min_lufs).toFixed(1)} a ${Number(profile.max_lufs).toFixed(1)} LUFS`);
+          }
+          if (profile.failed_count) parts.push(`${profile.failed_count} falha(s)`);
+          if (profile.stale) parts.push("alvo mudou");
+          summary.textContent = profile.message || parts.join(" · ");
+          summary.className = "fac-deck-summary";
+        } else {
+          summary.textContent = profile.message || "Analise o deck para calcular um ganho específico para cada áudio.";
+          summary.className = "fac-deck-summary";
+        }
       }
     },
 
