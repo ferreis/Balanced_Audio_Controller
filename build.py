@@ -9,6 +9,7 @@ DIST = ROOT / "dist"
 
 INCLUDE_FILES = [
     "__init__.py",
+    "i18n.py",
     "config.json",
     "config.schema.json",
     "manifest.json",
