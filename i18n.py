@@ -40,6 +40,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "audio_count": "{count} audio file(s)",
         "failure_count": "{count} failure(s)",
         "target_changed": "target changed",
+        "loudness_range": "{min} to {max} LUFS",
         "deck_summary_empty": "Analyze the deck to calculate a specific gain for each audio file.",
         # Native/player status
         "status_native_no_mpv": "Native player without MPV control",
@@ -90,6 +91,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "audio_count": "{count} áudio(s)",
         "failure_count": "{count} falha(s)",
         "target_changed": "alvo mudou",
+        "loudness_range": "{min} a {max} LUFS",
         "deck_summary_empty": "Analise o deck para calcular um ganho específico para cada áudio.",
         # Native/player status
         "status_native_no_mpv": "Player nativo sem controle MPV",
@@ -141,6 +143,7 @@ WEB_TRANSLATION_KEYS = {
     "audio_count",
     "failure_count",
     "target_changed",
+    "loudness_range",
     "deck_summary_empty",
 }
 
