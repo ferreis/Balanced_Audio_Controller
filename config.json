@@ -1,4 +1,5 @@
 {
+  "language": "auto",
   "normalize": true,
   "loudness_target": -24,
   "dual_mono": false,
