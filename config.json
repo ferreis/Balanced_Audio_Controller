@@ -5,5 +5,6 @@
   "dual_mono": false,
   "speed": 1.0,
   "volume": 1.0,
-  "deck_profile_enabled": false
+  "deck_profile_enabled": false,
+  "analysis_backend": "auto"
 }
