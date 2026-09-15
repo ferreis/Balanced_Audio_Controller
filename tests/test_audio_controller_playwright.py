@@ -10,6 +10,7 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "web" / "audio_controller.js"
+SCRIPT_V010 = ROOT / "web" / "audio_controller_v010.js"
 
 I18N = {
     "audio_control_aria": "Audio controls",
@@ -81,7 +82,7 @@ def base_config() -> dict:
                 "available": False,
                 "installing": False,
                 "installer_available": True,
-                "installer_name": "APT",
+                "installer_name": "imageio-ffmpeg 0.6.0",
             },
         },
     }
@@ -91,25 +92,41 @@ class AudioControllerPlaywrightTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.pw = sync_playwright().start()
-        executable = os.environ.get("BAC_CHROMIUM_EXECUTABLE") or shutil.which("chromium") or shutil.which("google-chrome")
+        executable = (
+            os.environ.get("BAC_CHROMIUM_EXECUTABLE")
+            or shutil.which("chromium")
+            or shutil.which("chromium-browser")
+            or shutil.which("google-chrome")
+        )
         kwargs = {"headless": True}
         if executable:
             kwargs["executable_path"] = executable
             kwargs["args"] = ["--no-sandbox"]
-        cls.browser = cls.pw.chromium.launch(**kwargs)
+        try:
+            cls.browser = cls.pw.chromium.launch(**kwargs)
+        except Exception as exc:
+            cls.pw.stop()
+            raise unittest.SkipTest(f"Chromium/Playwright unavailable: {exc}")
 
     @classmethod
     def tearDownClass(cls) -> None:
-        cls.browser.close()
-        cls.pw.stop()
+        if getattr(cls, "browser", None):
+            cls.browser.close()
+        if getattr(cls, "pw", None):
+            cls.pw.stop()
 
     def page_with_config(self, config: dict):
         page = self.browser.new_page()
         encoded = json.dumps(config).replace("&", "&amp;").replace('"', "&quot;")
-        page.set_content(f'<div id="ferreis-audio-controller" data-config="{encoded}"></div>')
+        page.set_content(
+            '<base href="http://127.0.0.1:8765/">'
+            f'<div id="ferreis-audio-controller" data-config="{encoded}"></div>'
+        )
         page.evaluate("window.__pycmdMessages=[]; window.pycmd=(m)=>window.__pycmdMessages.push(m);")
         page.add_script_tag(path=str(SCRIPT))
         page.evaluate("window.FerreisAnkiAudio.mount()")
+        page.add_script_tag(path=str(SCRIPT_V010))
+        page.wait_for_selector(".fac-analysis-backend")
         return page
 
     def test_backend_controls_and_install_command(self) -> None:
@@ -118,15 +135,12 @@ class AudioControllerPlaywrightTests(unittest.TestCase):
             self.assertEqual(page.locator(".fac-analysis-backend").input_value(), "auto")
             self.assertEqual(page.locator(".fac-engine-status").inner_text(), "Built-in")
             self.assertTrue(page.locator(".fac-install-ffmpeg").is_visible())
-
             page.locator(".fac-install-ffmpeg").click()
-            self.assertIn("ferreis_audio:ffmpeg:install", page.evaluate("window.__pycmdMessages"))
-
+            self.assertIn("ferreis_audio:v010:ffmpeg:install", page.evaluate("window.__pycmdMessages"))
             page.locator(".fac-analysis-backend").select_option("webaudio")
-            self.assertIn("ferreis_audio:set:analysis_backend:webaudio", page.evaluate("window.__pycmdMessages"))
-
+            self.assertIn("ferreis_audio:v010:backend:webaudio", page.evaluate("window.__pycmdMessages"))
             page.locator(".fac-analyze-deck").click()
-            self.assertIn("ferreis_audio:deck:analyze", page.evaluate("window.__pycmdMessages"))
+            self.assertIn("ferreis_audio:v010:analyze", page.evaluate("window.__pycmdMessages"))
         finally:
             page.close()
 
@@ -135,8 +149,8 @@ class AudioControllerPlaywrightTests(unittest.TestCase):
         config["deck_profile"]["ffmpeg"] = {
             "available": True,
             "installing": False,
-            "installer_available": False,
-            "installer_name": None,
+            "installer_available": True,
+            "installer_name": "imageio-ffmpeg 0.6.0",
         }
         config["deck_profile"]["resolved_backend"] = "ffmpeg"
         page = self.page_with_config(config)
@@ -163,8 +177,8 @@ class AudioControllerPlaywrightTests(unittest.TestCase):
                     numberOfChannels: 1,
                     getChannelData: () => data,
                   };
-                  const mono = window.FerreisAnkiAudio.measureAudioBuffer(audioBuffer, false);
-                  const dual = window.FerreisAnkiAudio.measureAudioBuffer(audioBuffer, true);
+                  const mono = window.BACV010.measureAudioBuffer(audioBuffer, false);
+                  const dual = window.BACV010.measureAudioBuffer(audioBuffer, true);
                   return { mono, dual };
                 }
                 """
@@ -173,6 +187,16 @@ class AudioControllerPlaywrightTests(unittest.TestCase):
             self.assertTrue(-22 < result["mono"]["input_tp"] < -17)
             delta = result["dual"]["input_i"] - result["mono"]["input_i"]
             self.assertTrue(2.8 < delta < 3.2, delta)
+        finally:
+            page.close()
+
+    def test_media_url_encodes_filename_and_rejects_traversal(self) -> None:
+        page = self.page_with_config(base_config())
+        try:
+            url = page.evaluate("window.BACV010.mediaUrl('áudio teste.mp3')")
+            self.assertIn("%C3%A1udio%20teste.mp3", url)
+            rejected = page.evaluate("window.BACV010.mediaUrl('../outside.mp3')")
+            self.assertIsNone(rejected)
         finally:
             page.close()
 
