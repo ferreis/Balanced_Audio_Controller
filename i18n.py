@@ -19,11 +19,11 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "volume": "Volume",
         "output_volume": "Output volume",
         "realtime_normalization": "Real-time normalization",
-        "realtime_normalization_hint": "Normalize perceived loudness in real time with FFmpeg loudnorm / EBU R128.",
+        "realtime_normalization_hint": "Normalize perceived loudness in real time with MPV/FFmpeg loudnorm (EBU R128).",
         "target_loudness": "Target loudness",
         "target_loudness_hint": "Integrated target loudness in LUFS",
         "dual_mono": "Treat mono as dual-mono",
-        "dual_mono_hint": "Compensate EBU R128 measurement for mono audio intended for stereo playback.",
+        "dual_mono_hint": "Compensate loudness measurement for mono audio intended for stereo playback.",
         "deck_profile": "Deck profile",
         "not_analyzed": "Not analyzed",
         "analyzing": "Analyzing",
@@ -43,7 +43,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "ffmpeg_missing": "FFmpeg not found",
         "install_ffmpeg": "Install FFmpeg",
         "ffmpeg_installing_ui": "Installing FFmpeg...",
-        "ffmpeg_installer_hint": "Optional: install FFmpeg for the most accurate deck analysis.",
+        "ffmpeg_installer_hint": "Optional: install a verified FFmpeg binary for the most accurate deck analysis.",
         "webaudio_hint": "Built-in analysis uses WebAudio and gated RMS. It requires no external installation and is approximate.",
         "profile_method_ffmpeg": "FFmpeg profile",
         "profile_method_webaudio": "Built-in approximate profile",
@@ -68,7 +68,6 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "ffmpeg_install_unavailable": "Automatic FFmpeg installation is not available on this system. Use Built-in analysis or install FFmpeg manually.",
         "ffmpeg_installing": "Installing FFmpeg with {installer}...",
         "ffmpeg_installed": "FFmpeg installed and ready.",
-        "ffmpeg_restart_required": "FFmpeg installation completed. Restart Anki so the new executable can be detected.",
         "ffmpeg_install_failed": "FFmpeg installation failed. Built-in analysis is still available.",
         "deck_audio_list_failed": "Unable to list the deck audio files.",
         "deck_no_audio": "No audio files were found in this deck.",
@@ -90,11 +89,11 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "volume": "Volume",
         "output_volume": "Volume de saída",
         "realtime_normalization": "Normalização em tempo real",
-        "realtime_normalization_hint": "Normaliza o loudness percebido em tempo real usando FFmpeg loudnorm / EBU R128.",
+        "realtime_normalization_hint": "Normaliza o loudness percebido em tempo real usando loudnorm do MPV/FFmpeg (EBU R128).",
         "target_loudness": "Loudness alvo",
         "target_loudness_hint": "Loudness integrado alvo em LUFS",
         "dual_mono": "Tratar mono como dual-mono",
-        "dual_mono_hint": "Compensa a medição EBU R128 de áudio mono destinado à reprodução estéreo.",
+        "dual_mono_hint": "Compensa a medição de loudness de áudio mono destinado à reprodução estéreo.",
         "deck_profile": "Perfil do deck",
         "not_analyzed": "Não analisado",
         "analyzing": "Analisando",
@@ -114,7 +113,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "ffmpeg_missing": "FFmpeg não encontrado",
         "install_ffmpeg": "Instalar FFmpeg",
         "ffmpeg_installing_ui": "Instalando FFmpeg...",
-        "ffmpeg_installer_hint": "Opcional: instale o FFmpeg para obter a análise mais precisa do deck.",
+        "ffmpeg_installer_hint": "Opcional: instale um binário verificado do FFmpeg para obter a análise mais precisa do deck.",
         "webaudio_hint": "A análise interna usa WebAudio e RMS com gate. Não exige instalação externa e é aproximada.",
         "profile_method_ffmpeg": "Perfil FFmpeg",
         "profile_method_webaudio": "Perfil interno aproximado",
@@ -139,7 +138,6 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "ffmpeg_install_unavailable": "A instalação automática do FFmpeg não está disponível neste sistema. Use a análise Interna ou instale o FFmpeg manualmente.",
         "ffmpeg_installing": "Instalando o FFmpeg com {installer}...",
         "ffmpeg_installed": "FFmpeg instalado e pronto.",
-        "ffmpeg_restart_required": "A instalação do FFmpeg terminou. Reinicie o Anki para que o novo executável seja detectado.",
         "ffmpeg_install_failed": "A instalação do FFmpeg falhou. A análise Interna continua disponível.",
         "deck_audio_list_failed": "Não foi possível listar os áudios do deck.",
         "deck_no_audio": "Nenhum arquivo de áudio foi encontrado neste deck.",
@@ -153,18 +151,51 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
 }
 
 WEB_TRANSLATION_KEYS = {
-    "audio_control_aria", "drag_hint", "audio", "speed", "decrease_speed",
-    "playback_speed", "increase_speed", "volume", "output_volume",
-    "realtime_normalization", "realtime_normalization_hint", "target_loudness",
-    "target_loudness_hint", "dual_mono", "dual_mono_hint", "deck_profile",
-    "not_analyzed", "analyzing", "reanalyze", "ready", "current_deck",
-    "use_analyzed_profile", "use_analyzed_profile_hint", "analyze_deck", "clear",
-    "analysis_method", "analysis_auto", "analysis_ffmpeg", "analysis_webaudio",
-    "analysis_webaudio_short", "ffmpeg_ready", "ffmpeg_missing", "install_ffmpeg",
-    "ffmpeg_installing_ui", "ffmpeg_installer_hint", "webaudio_hint",
-    "profile_method_ffmpeg", "profile_method_webaudio",
-    "preparing_analysis", "native_player", "audio_count", "failure_count",
-    "target_changed", "loudness_range", "deck_summary_empty",
+    "audio_control_aria",
+    "drag_hint",
+    "audio",
+    "speed",
+    "decrease_speed",
+    "playback_speed",
+    "increase_speed",
+    "volume",
+    "output_volume",
+    "realtime_normalization",
+    "realtime_normalization_hint",
+    "target_loudness",
+    "target_loudness_hint",
+    "dual_mono",
+    "dual_mono_hint",
+    "deck_profile",
+    "not_analyzed",
+    "analyzing",
+    "reanalyze",
+    "ready",
+    "current_deck",
+    "use_analyzed_profile",
+    "use_analyzed_profile_hint",
+    "analyze_deck",
+    "clear",
+    "analysis_method",
+    "analysis_auto",
+    "analysis_ffmpeg",
+    "analysis_webaudio",
+    "analysis_webaudio_short",
+    "ffmpeg_ready",
+    "ffmpeg_missing",
+    "install_ffmpeg",
+    "ffmpeg_installing_ui",
+    "ffmpeg_installer_hint",
+    "webaudio_hint",
+    "profile_method_ffmpeg",
+    "profile_method_webaudio",
+    "preparing_analysis",
+    "native_player",
+    "audio_count",
+    "failure_count",
+    "target_changed",
+    "loudness_range",
+    "deck_summary_empty",
 }
 
 
@@ -178,6 +209,7 @@ def detect_system_language() -> str:
     candidates: list[str] = []
     try:
         from aqt.qt import QLocale
+
         candidates.append(str(QLocale.system().name()))
     except Exception:
         pass
@@ -219,3 +251,10 @@ def t(language: str, key: str, **values: Any) -> str:
 
 def web_strings(language: str) -> dict[str, str]:
     return {key: t(language, key) for key in WEB_TRANSLATION_KEYS}
+
+# v0.10 is loaded from i18n because this module is imported during add-on startup.
+# The extension registers only dev-branch hooks and leaves the stable playback core intact.
+try:
+    from . import v010 as _v010  # noqa: F401,E402
+except Exception as _v010_error:
+    print("[Balanced Audio Controller] v0.10 extension load failed:", _v010_error)
