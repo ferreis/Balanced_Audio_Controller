@@ -9,6 +9,8 @@ DIST = ROOT / "dist"
 
 INCLUDE_FILES = [
     "__init__.py",
+    "analysis_engine.py",
+    "v010.py",
     "i18n.py",
     "config.json",
     "config.schema.json",
@@ -42,6 +44,15 @@ def build() -> Path:
         bad_file = archive.testzip()
         if bad_file:
             raise RuntimeError(f"Arquivo corrompido dentro do pacote: {bad_file}")
+        names = set(archive.namelist())
+        required = set(INCLUDE_FILES) | {
+            "web/audio_controller.css",
+            "web/audio_controller.js",
+            "web/audio_controller_v010.js",
+        }
+        missing = sorted(required - names)
+        if missing:
+            raise RuntimeError(f"Arquivos ausentes no pacote: {', '.join(missing)}")
 
     print(output)
     return output
