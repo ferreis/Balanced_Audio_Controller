@@ -1,5 +1,6 @@
 (() => {
   const MAX_AUDIO_BYTES = 64 * 1024 * 1024;
+  const PANEL_MINIMIZED_KEY = "ferreisAudioSidePanelMinimizedV1";
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const t = (key, values = {}) => {
     const base = window.FerreisAnkiAudio;
@@ -28,8 +29,12 @@
       if (this.mounted || !this.root) return;
       const block = this.root.querySelector(".fac-deck-profile-block");
       const actions = this.root.querySelector(".fac-deck-actions");
-      if (!block || !actions) return;
+      const handle = this.root.querySelector(".fac-side-handle");
+      if (!block || !actions || !handle) return;
       this.mounted = true;
+
+      this.installMinimizeStyles();
+      this.installMinimizeControl(handle);
 
       const engine = document.createElement("div");
       engine.className = "fac-analysis-engine";
@@ -83,6 +88,94 @@
         base.__bacV010Patched = true;
       }
       pycmd("ferreis_audio:v010:state");
+    },
+
+    panelLabel(minimized) {
+      const language = window.FerreisAnkiAudio?.config?.language || "en";
+      if (language === "pt-BR") return minimized ? "Expandir painel" : "Minimizar painel";
+      return minimized ? "Expand panel" : "Minimize panel";
+    },
+
+    readMinimizedState() {
+      try {
+        return localStorage.getItem(PANEL_MINIMIZED_KEY) === "1";
+      } catch (_) {
+        return false;
+      }
+    },
+
+    installMinimizeStyles() {
+      if (document.getElementById("fac-minimize-styles")) return;
+      const style = document.createElement("style");
+      style.id = "fac-minimize-styles";
+      style.textContent = `
+        #ferreis-audio-controller .fac-panel-toggle {
+          flex: 0 0 24px;
+          display: grid;
+          place-items: center;
+          width: 24px;
+          height: 22px;
+          margin: 0 0 0 auto;
+          padding: 0;
+          border-radius: 5px;
+          font-size: 16px;
+          line-height: 1;
+        }
+        #ferreis-audio-controller .fac-side-panel.fac-minimized {
+          width: 152px;
+        }
+        #ferreis-audio-controller .fac-side-panel.fac-minimized .fac-side-body {
+          display: none;
+        }
+        #ferreis-audio-controller .fac-side-panel.fac-minimized .fac-side-handle {
+          border-bottom: 0;
+        }
+      `;
+      document.head.appendChild(style);
+    },
+
+    installMinimizeControl(handle) {
+      let button = handle.querySelector(".fac-panel-toggle");
+      if (!button) {
+        button = document.createElement("button");
+        button.className = "fac-panel-toggle";
+        button.type = "button";
+        handle.appendChild(button);
+      }
+
+      button.addEventListener("pointerdown", (event) => event.stopPropagation());
+      button.addEventListener("dblclick", (event) => event.stopPropagation());
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const panel = this.root?.querySelector(".fac-side-panel");
+        if (!panel) return;
+        this.setMinimized(!panel.classList.contains("fac-minimized"));
+      });
+
+      this.setMinimized(this.readMinimizedState(), false);
+    },
+
+    setMinimized(minimized, persist = true) {
+      const panel = this.root?.querySelector(".fac-side-panel");
+      const button = this.root?.querySelector(".fac-panel-toggle");
+      if (!panel || !button) return;
+
+      const collapsed = Boolean(minimized);
+      panel.classList.toggle("fac-minimized", collapsed);
+      button.textContent = collapsed ? "+" : "−";
+      button.title = this.panelLabel(collapsed);
+      button.setAttribute("aria-label", button.title);
+      button.setAttribute("aria-expanded", collapsed ? "false" : "true");
+
+      if (persist) {
+        try {
+          localStorage.setItem(PANEL_MINIMIZED_KEY, collapsed ? "1" : "0");
+        } catch (_) {}
+      }
+
+      if (!collapsed) {
+        requestAnimationFrame(() => window.FerreisAnkiAudio?.restoreSidePanelPosition?.());
+      }
     },
 
     resolvedBackend() {
