@@ -160,6 +160,25 @@ class AudioControllerPlaywrightTests(unittest.TestCase):
         finally:
             page.close()
 
+    def test_panel_can_minimize_and_expand(self) -> None:
+        page = self.page_with_config(base_config())
+        try:
+            panel = page.locator(".fac-side-panel")
+            toggle = page.locator(".fac-panel-toggle")
+            self.assertEqual(toggle.get_attribute("aria-expanded"), "true")
+            self.assertEqual(toggle.get_attribute("title"), "Minimize panel")
+
+            toggle.click()
+            self.assertIn("fac-minimized", panel.get_attribute("class") or "")
+            self.assertEqual(toggle.get_attribute("aria-expanded"), "false")
+            self.assertEqual(toggle.get_attribute("title"), "Expand panel")
+
+            toggle.click()
+            self.assertNotIn("fac-minimized", panel.get_attribute("class") or "")
+            self.assertEqual(toggle.get_attribute("aria-expanded"), "true")
+        finally:
+            page.close()
+
     def test_builtin_loudness_measurement_and_dual_mono(self) -> None:
         page = self.page_with_config(base_config())
         try:
