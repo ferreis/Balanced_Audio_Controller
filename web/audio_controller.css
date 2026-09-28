@@ -121,6 +121,7 @@
   white-space: nowrap;
 }
 
+/* Velocidade: três segmentos simétricos; o valor e a unidade formam um único grupo central. */
 #ferreis-audio-controller .fac-speed-control {
   display: flex;
   align-items: stretch;
@@ -381,4 +382,53 @@
   #ferreis-audio-controller .fac-side-panel {
     width: 205px;
   }
+}
+
+#ferreis-audio-controller .fac-analysis-engine {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px 0 2px;
+  border-top: 1px solid var(--fac-divider);
+}
+
+#ferreis-audio-controller .fac-analysis-backend {
+  width: 100%;
+  height: 30px;
+  padding: 0 7px;
+  border: 1px solid var(--fac-border);
+  border-radius: 6px;
+  outline: none;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--fac-text);
+  font: inherit;
+}
+
+#ferreis-audio-controller .fac-analysis-backend:focus {
+  border-color: var(--fac-accent);
+  box-shadow: 0 0 0 2px rgba(106, 169, 255, 0.14);
+}
+
+#ferreis-audio-controller .fac-analysis-backend option {
+  background: rgb(31, 34, 40);
+  color: var(--fac-text);
+}
+
+#ferreis-audio-controller .fac-engine-status {
+  max-width: 112px;
+  overflow: hidden;
+  color: var(--fac-muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#ferreis-audio-controller .fac-install-ffmpeg {
+  width: 100%;
+}
+
+#ferreis-audio-controller .fac-engine-note {
+  color: var(--fac-muted);
+  font-size: 9px;
+  line-height: 1.35;
 }

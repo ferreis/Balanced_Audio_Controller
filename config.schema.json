@@ -5,47 +5,56 @@
       "type": "string",
       "title": "Language / Idioma",
       "description": "auto detects the computer/system language. Portuguese locales use pt-BR; every unsupported locale falls back to English. You can also force English or Portuguese (Brazil). / auto detecta o idioma do computador/sistema. Locales em português usam pt-BR; qualquer idioma não suportado usa inglês. Também é possível forçar English ou Português (Brasil).",
-      "enum": ["auto", "en", "pt-BR"],
+      "enum": [
+        "auto",
+        "en",
+        "pt-BR"
+      ],
       "default": "auto"
     },
     "normalize": {
       "type": "boolean",
-      "title": "Real-time loudness normalization / Normalização em tempo real",
-      "description": "Uses FFmpeg loudnorm (EBU R128) through MPV to reduce perceived loudness differences during playback. / Usa FFmpeg loudnorm (EBU R128) pelo MPV para reduzir diferenças de loudness percebido durante a reprodução."
+      "title": "Real-time loudness normalization / Normalização em tempo real"
     },
     "loudness_target": {
       "type": "number",
       "minimum": -50,
       "maximum": -20,
       "default": -24,
-      "title": "Target loudness (LUFS) / Loudness alvo (LUFS)",
-      "description": "Values closer to -20 sound louder; values closer to -50 sound quieter. Default: -24 LUFS. / Valores mais próximos de -20 soam mais altos; valores mais próximos de -50 soam mais baixos. Padrão: -24 LUFS."
+      "title": "Target loudness (LUFS) / Loudness alvo (LUFS)"
     },
     "dual_mono": {
       "type": "boolean",
-      "title": "Treat mono as dual-mono / Tratar mono como dual-mono",
-      "description": "Compensates EBU R128 measurement for mono audio intended for stereo playback. / Compensa a medição EBU R128 de áudio mono destinado à reprodução estéreo."
+      "title": "Treat mono as dual-mono / Tratar mono como dual-mono"
     },
     "speed": {
       "type": "number",
       "minimum": 0.25,
       "maximum": 2.0,
       "default": 1.0,
-      "title": "Initial speed / Velocidade inicial",
-      "description": "Default playback speed. Default value: 1.0x. / Velocidade padrão de reprodução. Valor padrão: 1.0x."
+      "title": "Initial speed / Velocidade inicial"
     },
     "volume": {
       "type": "number",
       "minimum": 0,
       "maximum": 1,
       "default": 1.0,
-      "title": "Initial volume / Volume inicial",
-      "description": "Initial output volume from 0.0 to 1.0. / Volume inicial de saída entre 0.0 e 1.0."
+      "title": "Initial volume / Volume inicial"
     },
     "deck_profile_enabled": {
       "type": "boolean",
-      "title": "Use deck normalization profile / Usar perfil de normalização do deck",
-      "description": "When a compatible analyzed profile exists, applies the measured gain for each audio file. / Quando existe um perfil analisado compatível, aplica o ganho medido para cada arquivo de áudio."
+      "title": "Use deck normalization profile / Usar perfil de normalização do deck"
+    },
+    "analysis_backend": {
+      "type": "string",
+      "title": "Deck analysis method / Método de análise do deck",
+      "description": "auto uses FFmpeg when available and falls back to the built-in WebAudio analyzer. ffmpeg requires the external executable. webaudio never requires FFmpeg and uses an approximate gated-RMS measurement. / auto usa FFmpeg quando disponível e usa o analisador WebAudio interno como fallback. ffmpeg exige o executável externo. webaudio nunca exige FFmpeg e usa uma medição aproximada por RMS com gate.",
+      "enum": [
+        "auto",
+        "ffmpeg",
+        "webaudio"
+      ],
+      "default": "auto"
     }
   }
 }
