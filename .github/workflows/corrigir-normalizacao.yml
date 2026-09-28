@@ -1,0 +1,301 @@
+# Workflow temporário da branch dev.
+# Descrição: aplica a correção de estabilidade da normalização, executa testes Playwright e valida regras de segurança antes do commit.
+name: Corrigir e validar normalização
+run-name: Corrigir e validar normalização do áudio
+
+on:
+  push:
+    branches:
+      - dev
+    paths:
+      - .github/workflows/corrigir-normalizacao.yml
+
+permissions:
+  contents: write
+
+jobs:
+  corrigir-validar:
+    name: Corrigir, testar e auditar
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Obter código da branch dev
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Aplicar correção da normalização
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path('.')
+          init_path = root / '__init__.py'
+          source = init_path.read_text(encoding='utf-8')
+
+          old_globals = '''_PROFILE_LOCK = threading.Lock()\n_ANALYSIS_LOCK = threading.Lock()\n_ANALYSIS_RUNNING: set[str] = set()\n'''
+          new_globals = '''_PROFILE_LOCK = threading.Lock()\n_ANALYSIS_LOCK = threading.Lock()\n_PLAYBACK_LOCK = threading.RLock()\n_ANALYSIS_RUNNING: set[str] = set()\n_CURRENT_AUDIO_FILENAME: str | None = None\n'''
+          if old_globals not in source:
+              raise SystemExit('Bloco de locks não encontrado')
+          source = source.replace(old_globals, new_globals, 1)
+
+          marker = '''def _current_reviewer_deck_id() -> int | None:\n    card = _current_reviewer_card()\n    return _card_deck_id(card) if card else None\n\n'''
+          helpers = marker + '''def _current_audio_filename() -> str | None:\n    with _PLAYBACK_LOCK:\n        return _CURRENT_AUDIO_FILENAME\n\n\ndef _set_current_audio_filename(filename: str | None) -> None:\n    global _CURRENT_AUDIO_FILENAME\n    with _PLAYBACK_LOCK:\n        _CURRENT_AUDIO_FILENAME = filename\n\n\n'''
+          if marker not in source:
+              raise SystemExit('Ponto para estado do áudio atual não encontrado')
+          source = source.replace(marker, helpers, 1)
+
+          start = source.index('def _apply_native_settings(')
+          end = source.index('\ndef _tag_filename', start)
+          replacement = '''def _apply_native_settings(\n    player: Any | None = None,\n    filename: str | None = None,\n    *,\n    update_filters: bool = True,\n) -> tuple[bool, str]:\n    conf = _config()\n    lang = _language(conf)\n    player = player or av_player.current_player\n    if not _is_mpv_player(player):\n        return False, t(lang, "status_native_no_mpv")\n\n    speed = max(0.25, min(2.0, float(conf.get("speed", 1.0))))\n    volume = max(0.0, min(1.0, float(conf.get("volume", 1.0))))\n    normalize = bool(conf.get("normalize", True))\n    target = max(-50.0, min(-20.0, float(conf.get("loudness_target", -24.0))))\n\n    try:\n        player.set_property("speed", speed)\n        player.set_property("volume", volume * 100.0)\n    except Exception as exc:\n        print("[Balanced Audio Controller] unable to set MPV speed/volume:", exc)\n        return False, t(lang, "status_mpv_control_failed")\n\n    # Speed and volume changes must not rebuild the MPV audio-filter graph.\n    # Recreating loudnorm while audio is already playing causes audible cuts and\n    # can also replace a per-file deck gain when filename is not available.\n    if not update_filters:\n        return True, ""\n\n    if filename is None:\n        filename = _current_audio_filename()\n\n    _remove_filter(player, NORMALIZE_FILTER_NAME)\n    _remove_filter(player, DECK_GAIN_FILTER_NAME)\n\n    profile, entry = _profile_entry_for_current_deck(filename, conf)\n    if entry is not None:\n        try:\n            gain_db = float(entry.get("gain_db", 0.0))\n            player.command("af", "add", _deck_gain_filter(gain_db))\n            return True, t(lang, "status_deck_profile_gain", gain=gain_db)\n        except Exception as exc:\n            print("[Balanced Audio Controller] unable to apply deck gain:", exc)\n\n    if (\n        profile\n        and bool(conf.get("deck_profile_enabled", False))\n        and not _profile_matches_config(profile, conf)\n    ):\n        profile_note = t(lang, "status_profile_stale_prefix")\n    else:\n        profile_note = ""\n\n    if normalize:\n        try:\n            player.command("af", "add", _normalizer_filter(conf))\n            return True, t(\n                lang,\n                "status_realtime_normalization",\n                prefix=profile_note,\n                target=target,\n            )\n        except Exception as exc:\n            print("[Balanced Audio Controller] loudnorm unavailable:", exc)\n            return True, t(\n                lang,\n                "status_loudnorm_unavailable",\n                prefix=profile_note,\n            )\n\n    return True, t(lang, "status_normalization_off", prefix=profile_note)\n'''
+          source = source[:start] + replacement + source[end:]
+
+          old_hook = '''def _on_av_player_did_begin_playing(player: Any, tag: Any) -> None:\n    filename = _tag_filename(tag)\n    _supported, status = _apply_native_settings(player, filename)\n    _push_status(status)\n'''
+          new_hook = '''def _on_av_player_will_play(tag: Any) -> None:\n    # Anki sets av_player.current_player before this hook and only calls\n    # player.play() afterwards. Configure MPV here so loudnorm/gain is ready\n    # before the file starts, avoiding audio-chain resets after playback begins.\n    filename = _tag_filename(tag)\n    _set_current_audio_filename(filename)\n    player = av_player.current_player\n    _supported, status = _apply_native_settings(player, filename)\n    if status:\n        _push_status(status)\n\n\ndef _on_av_player_did_end_playing(player: Any) -> None:\n    _set_current_audio_filename(None)\n'''
+          if old_hook not in source:
+              raise SystemExit('Hook de início antigo não encontrado')
+          source = source.replace(old_hook, new_hook, 1)
+
+          old_clear = '''            _clear_deck_profile(deck_id)\n            _push_deck_profile_state(_deck_profile_summary(deck_id))\n        return (True, None)\n'''
+          new_clear = '''            _clear_deck_profile(deck_id)\n            _push_deck_profile_state(_deck_profile_summary(deck_id))\n            _supported, status = _apply_native_settings(\n                filename=_current_audio_filename()\n            )\n            if status:\n                _push_status(status)\n        return (True, None)\n'''
+          if old_clear not in source:
+              raise SystemExit('Bloco de limpeza de perfil não encontrado')
+          source = source.replace(old_clear, new_clear, 1)
+
+          old_enable = '''        if card:\n            _push_deck_profile_state(_deck_profile_summary(_card_deck_id(card)))\n        return (True, None)\n\n    if not message.startswith("ferreis_audio:set:"):\n'''
+          new_enable = '''        if card:\n            _push_deck_profile_state(_deck_profile_summary(_card_deck_id(card)))\n        _supported, status = _apply_native_settings(\n            filename=_current_audio_filename()\n        )\n        if status:\n            _push_status(status)\n        return (True, None)\n\n    if not message.startswith("ferreis_audio:set:"):\n'''
+          if old_enable not in source:
+              raise SystemExit('Bloco de ativação do perfil não encontrado')
+          source = source.replace(old_enable, new_enable, 1)
+
+          old_apply = '''        _supported, status = _apply_native_settings()\n        context.web.eval(\n            "window.FerreisAnkiAudio && window.FerreisAnkiAudio.setStatus("\n            + json.dumps(status, ensure_ascii=False)\n            + ");"\n        )\n        return (True, None)\n'''
+          new_apply = '''        update_filters = key in {"normalize", "loudness_target", "dual_mono"}\n        _supported, status = _apply_native_settings(\n            filename=_current_audio_filename(),\n            update_filters=update_filters,\n        )\n        if status:\n            context.web.eval(\n                "window.FerreisAnkiAudio && window.FerreisAnkiAudio.setStatus("\n                + json.dumps(status, ensure_ascii=False)\n                + ");"\n            )\n        return (True, None)\n'''
+          if old_apply not in source:
+              raise SystemExit('Aplicação de settings não encontrada')
+          source = source.replace(old_apply, new_apply, 1)
+
+          old_registration = 'gui_hooks.av_player_did_begin_playing.append(_on_av_player_did_begin_playing)\n'
+          new_registration = '''gui_hooks.av_player_will_play.append(_on_av_player_will_play)\ngui_hooks.av_player_did_end_playing.append(_on_av_player_did_end_playing)\n'''
+          if old_registration not in source:
+              raise SystemExit('Registro do hook antigo não encontrado')
+          source = source.replace(old_registration, new_registration, 1)
+          init_path.write_text(source, encoding='utf-8')
+
+          js_path = root / 'web' / 'audio_controller.js'
+          js = js_path.read_text(encoding='utf-8')
+          old_js = '''      loudness.addEventListener("input", () => {\n        const value = clamp(Number(loudness.value), -50, -20);\n        this.config.loudness_target = value;\n        this.updateLoudnessValue(value);\n        pycmd(`ferreis_audio:set:loudness_target:${value}`);\n      });\n'''
+          new_js = '''      loudness.addEventListener("input", () => {\n        const value = clamp(Number(loudness.value), -50, -20);\n        this.config.loudness_target = value;\n        this.updateLoudnessValue(value);\n      });\n\n      loudness.addEventListener("change", () => {\n        const value = clamp(Number(loudness.value), -50, -20);\n        this.config.loudness_target = value;\n        this.updateLoudnessValue(value);\n        pycmd(`ferreis_audio:set:loudness_target:${value}`);\n      });\n'''
+          if old_js not in js:
+              raise SystemExit('Handler do slider de loudness não encontrado')
+          js = js.replace(old_js, new_js, 1)
+          js_path.write_text(js, encoding='utf-8')
+
+          test_path = root / 'tests' / 'test_playback_regression.py'
+          test_path.write_text(r'''from __future__ import annotations
+
+import ast
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE = (ROOT / "__init__.py").read_text(encoding="utf-8")
+
+
+def load_function(name: str, namespace: dict[str, Any]):
+    tree = ast.parse(SOURCE)
+    node = next(
+        item
+        for item in tree.body
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == name
+    )
+    module = ast.Module(body=[node], type_ignores=[])
+    ast.fix_missing_locations(module)
+    compiled = compile(module, str(ROOT / "__init__.py"), "exec")
+    exec(compiled, namespace)
+    return namespace[name]
+
+
+class FakePlayer:
+    def __init__(self) -> None:
+        self.properties: list[tuple[str, float]] = []
+        self.commands: list[tuple[Any, ...]] = []
+
+    def set_property(self, key: str, value: float) -> None:
+        self.properties.append((key, value))
+
+    def command(self, *args: Any) -> None:
+        self.commands.append(args)
+
+
+class PlaybackRegressionTests(unittest.TestCase):
+    def base_namespace(self, player: FakePlayer) -> dict[str, Any]:
+        config = {
+            "speed": 1.25,
+            "volume": 0.75,
+            "normalize": True,
+            "loudness_target": -24,
+            "dual_mono": False,
+            "deck_profile_enabled": True,
+        }
+        return {
+            "Any": Any,
+            "_config": lambda: config,
+            "_language": lambda conf: "en",
+            "_is_mpv_player": lambda value: value is player,
+            "av_player": SimpleNamespace(current_player=player),
+            "_current_audio_filename": lambda: "current.mp3",
+            "_remove_filter": lambda *args: None,
+            "NORMALIZE_FILTER_NAME": "@normalize",
+            "DECK_GAIN_FILTER_NAME": "@deck",
+            "_profile_entry_for_current_deck": lambda filename, conf: (None, None),
+            "_profile_matches_config": lambda profile, conf: True,
+            "_deck_gain_filter": lambda gain: f"deck:{gain}",
+            "_normalizer_filter": lambda conf: "normalize",
+            "t": lambda language, key, **values: key,
+        }
+
+    def test_speed_volume_update_does_not_rebuild_filters(self) -> None:
+        player = FakePlayer()
+        ns = self.base_namespace(player)
+        filter_calls: list[tuple[Any, ...]] = []
+        ns["_remove_filter"] = lambda *args: filter_calls.append(args)
+        ns["_profile_entry_for_current_deck"] = lambda *_: self.fail(
+            "profile lookup must not run for speed/volume-only updates"
+        )
+        apply_settings = load_function("_apply_native_settings", ns)
+
+        supported, status = apply_settings(
+            player, "current.mp3", update_filters=False
+        )
+
+        self.assertTrue(supported)
+        self.assertEqual(status, "")
+        self.assertEqual(filter_calls, [])
+        self.assertEqual(player.commands, [])
+        self.assertIn(("speed", 1.25), player.properties)
+        self.assertIn(("volume", 75.0), player.properties)
+
+    def test_filter_refresh_reuses_current_filename_for_deck_profile(self) -> None:
+        player = FakePlayer()
+        ns = self.base_namespace(player)
+        filenames: list[str | None] = []
+
+        def profile_entry(filename, conf):
+            filenames.append(filename)
+            return ({"target": -24, "dual_mono": False}, {"gain_db": 3.5})
+
+        ns["_profile_entry_for_current_deck"] = profile_entry
+        apply_settings = load_function("_apply_native_settings", ns)
+
+        supported, _status = apply_settings(player, None, update_filters=True)
+
+        self.assertTrue(supported)
+        self.assertEqual(filenames, ["current.mp3"])
+        self.assertIn(("af", "add", "deck:3.5"), player.commands)
+
+    def test_playback_is_registered_before_file_starts(self) -> None:
+        self.assertIn(
+            "gui_hooks.av_player_will_play.append(_on_av_player_will_play)",
+            SOURCE,
+        )
+        self.assertNotIn(
+            "gui_hooks.av_player_did_begin_playing.append(_on_av_player_did_begin_playing)",
+            SOURCE,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
+''', encoding='utf-8')
+
+          playwright_path = root / 'tests' / 'test_audio_controller_playwright.py'
+          pw = playwright_path.read_text(encoding='utf-8')
+          insertion = r'''
+    def test_loudness_slider_commits_only_on_change(self) -> None:
+        page = self.page_with_config(base_config())
+        try:
+            page.evaluate("window.__pycmdMessages=[]")
+            slider = page.locator(".fac-loudness")
+            slider.evaluate(
+                """el => {
+                    el.value = '-30';
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                }"""
+            )
+            self.assertEqual(page.evaluate("window.__pycmdMessages"), [])
+            self.assertEqual(page.locator(".fac-loudness-value").inner_text(), "-30 LUFS")
+
+            slider.evaluate(
+                """el => el.dispatchEvent(new Event('change', { bubbles: true }))"""
+            )
+            self.assertEqual(
+                page.evaluate("window.__pycmdMessages"),
+                ["ferreis_audio:set:loudness_target:-30"],
+            )
+        finally:
+            page.close()
+
+'''
+          marker = '\n\nif __name__ == "__main__":\n'
+          if marker not in pw:
+              raise SystemExit('Ponto de inserção dos testes Playwright não encontrado')
+          pw = pw.replace(marker, '\n' + insertion + marker, 1)
+          playwright_path.write_text(pw, encoding='utf-8')
+          PY
+
+      - name: Preparar Playwright
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --disable-pip-version-check --no-cache-dir playwright
+          .venv/bin/python -m playwright install --with-deps chromium
+
+      - name: Executar testes automatizados
+        shell: bash
+        run: |
+          set -euo pipefail
+          .venv/bin/python -m compileall -q __init__.py analysis_engine.py i18n.py v010.py tests
+          .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Validar segurança da alteração
+        shell: bash
+        run: |
+          set -euo pipefail
+          .venv/bin/python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          problemas = []
+          for arquivo in [Path('__init__.py'), Path('analysis_engine.py'), Path('v010.py')]:
+              arvore = ast.parse(arquivo.read_text(encoding='utf-8'), filename=str(arquivo))
+              for no in ast.walk(arvore):
+                  if isinstance(no, ast.Call):
+                      for kw in no.keywords:
+                          if kw.arg == 'shell' and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                              problemas.append(f'{arquivo}:{getattr(no, "lineno", "?")}: shell=True')
+
+          source = Path('__init__.py').read_text(encoding='utf-8')
+          if 'av_player_will_play.append(_on_av_player_will_play)' not in source:
+              problemas.append('normalização não está configurada no hook pré-playback')
+          if 'update_filters=update_filters' not in source:
+              problemas.append('settings não separam atualização de propriedades e filtros')
+          if problemas:
+              raise SystemExit('\n'.join(problemas))
+          print('Validação de segurança concluída sem violações detectadas.')
+          PY
+
+      - name: Registrar correção na branch dev
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Rafael Fernando dos reis Mecabô"
+          git config user.email "rafa_ferreis@hotmail.com"
+          git add __init__.py web/audio_controller.js tests/test_playback_regression.py tests/test_audio_controller_playwright.py
+          git diff --cached --check
+          git commit -m "fix: estabilizar normalização durante reprodução"
+          git push origin HEAD:dev
