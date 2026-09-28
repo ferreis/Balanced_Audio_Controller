@@ -1,8 +1,8 @@
-# Balanced Audio Controller v0.10.0-dev
+# Balanced Audio Controller v0.10.0
 
-Free and open-source audio controller for Anki Desktop. It keeps Anki's native MPV playback while adding speed, volume, loudness normalization and persistent per-deck audio profiles.
+Free and open-source audio controller for Anki Desktop. It keeps Anki's native MPV playback while adding speed, volume, loudness normalization, persistent per-deck audio profiles, optional FFmpeg installation, a built-in analyzer that works without FFmpeg, and a minimizable floating panel.
 
-Extensão gratuita e de código aberto para Anki Desktop. Mantém a reprodução nativa pelo MPV e adiciona velocidade, volume, normalização de loudness e perfis persistentes por deck.
+Extensão gratuita e de código aberto para Anki Desktop. Mantém a reprodução nativa pelo MPV e adiciona velocidade, volume, normalização de loudness, perfis persistentes por deck, instalação opcional do FFmpeg, analisador interno que funciona sem FFmpeg e painel flutuante minimizável.
 
 ---
 
@@ -33,10 +33,12 @@ Change it in **Tools → Add-ons → Balanced Audio Controller → Config/Config
 - Volume: **0% to 100%**.
 - The original Anki play/replay buttons remain native and are not replaced.
 - The floating panel is draggable; double-click its title bar to reset its position.
+- The **−** button in the panel title minimizes the add-on to its title bar. When minimized, the button changes to **+** so the panel can be expanded again.
+- The minimized/expanded state is stored locally and restored on later cards.
 
 ### Real-time normalization
 
-When enabled, the add-on applies FFmpeg `loudnorm` through Anki's MPV player during playback.
+When enabled, the add-on applies `loudnorm` through Anki's MPV player during playback.
 
 - Target loudness: **-50 to -20 LUFS**.
 - Default: **-24 LUFS**.
@@ -60,7 +62,7 @@ It remains available after Anki or the computer is restarted.
 
 #### Analysis methods
 
-The add-on now supports three modes through `analysis_backend`:
+The add-on supports three modes through `analysis_backend`:
 
 ```text
 auto
@@ -77,38 +79,43 @@ webaudio
 **`ffmpeg`**
 
 - Uses FFmpeg `loudnorm` for the most accurate full-file analysis.
-- If FFmpeg is missing, the panel can offer an **Install FFmpeg** button when a supported system package manager is available.
-- The add-on never silently installs software; installation only starts after an explicit click.
+- If FFmpeg is missing and the current platform is supported, the panel offers **Install FFmpeg**.
+- The add-on never silently installs software; installation starts only after an explicit click.
 
 **`webaudio` / Built-in (no FFmpeg)**
 
 - Does not require an external FFmpeg executable.
-- Uses Qt WebEngine's WebAudio decoder to decode common deck audio formats such as MP3, OGG and WAV.
-- Uses 400 ms blocks with 75% overlap, absolute and relative gating, plus a conservative peak safety margin.
-- The measurement is intentionally marked as **approximate** because WebAudio does not expose FFmpeg's full EBU R128/true-peak implementation.
+- Uses Qt WebEngine's WebAudio decoder for common audio formats supported by the Anki webview.
+- Uses 400 ms analysis blocks, gated RMS measurement and a peak safety calculation.
+- The result is intentionally marked as **approximate** because WebAudio does not expose FFmpeg's full EBU R128/true-peak implementation.
 - It is intended to provide useful deck-wide balancing when the user does not want to install FFmpeg.
-- Files larger than 8 MB are skipped by the built-in analyzer to avoid excessive memory transfer through the reviewer webview.
+- Files larger than **64 MB** are rejected by the built-in analyzer to avoid excessive memory use.
 
 ### Optional FFmpeg installation
 
-When FFmpeg is missing and automatic installation is supported, the panel displays **Install FFmpeg**.
+When FFmpeg is missing and the platform is supported, the panel displays **Install FFmpeg**.
 
-Supported installers are detected locally:
+The add-on downloads a pinned `imageio-ffmpeg` platform package and extracts only its FFmpeg executable into the add-on's persistent `user_files` directory:
 
-- Windows: `winget` (`Gyan.FFmpeg`).
-- macOS: Homebrew.
-- Linux: Homebrew, or `APT`, `DNF`, `Pacman`, or `Zypper` through `pkexec`.
+```text
+user_files/tools/ffmpeg/
+```
+
+This does **not** require administrator/root privileges and does not replace the system FFmpeg.
 
 Security rules used by the installer:
 
 - installation only starts after an explicit user click;
-- commands are fixed in the source code and never come from card content or add-on configuration;
+- download URLs are fixed in the source code and use HTTPS;
+- the expected platform, file size and SHA-256 are pinned;
+- redirects to untrusted hosts are rejected;
+- only the expected FFmpeg binary is extracted;
+- the extracted executable is validated before being used;
 - external processes use argument arrays with `shell=False`;
-- the installer has a timeout;
 - failure never blocks normal Anki playback;
 - the built-in analyzer remains available if installation is declined or fails.
 
-Some sandboxed Anki packages, including certain Flatpak setups, may not expose a host package manager. In that case automatic installation is unavailable and the built-in analyzer is used instead.
+Supported managed-download targets currently include Windows x86-64, Linux x86-64, Linux ARM64, macOS Intel and macOS Apple Silicon.
 
 ### Analyze deck workflow
 
@@ -146,15 +153,21 @@ python3 build.py
 
 The package is created in `dist/` and contains only runtime add-on files. Tests, local user profiles and caches are excluded.
 
-### Playwright tests
+### Tests
 
-The reviewer UI and built-in loudness measurement have automated Playwright tests:
+Python tests:
+
+```bash
+python -m unittest tests.test_analysis_engine -v
+```
+
+Playwright reviewer UI tests:
 
 ```bash
 python tests/test_audio_controller_playwright.py -v
 ```
 
-If Chromium is not on PATH, set `BAC_CHROMIUM_EXECUTABLE` or install a Playwright Chromium browser.
+The Playwright suite covers analysis controls, FFmpeg state, the built-in loudness measurement, path traversal rejection and panel minimize/expand behavior.
 
 ---
 
@@ -185,10 +198,12 @@ Para alterar, abra **Ferramentas → Extensões/Add-ons → Balanced Audio Contr
 - Volume: **0% até 100%**.
 - Os botões originais de play/replay do Anki permanecem nativos.
 - O painel é arrastável; dois cliques na barra de título restauram a posição padrão.
+- O botão **−** na barra de título minimiza o add-on deixando apenas a barra superior. Minimizado, o botão muda para **+** para expandir novamente.
+- O estado minimizado/expandido é salvo localmente e restaurado nos próximos cartões.
 
 ### Normalização em tempo real
 
-Quando ativada, a extensão aplica o filtro FFmpeg `loudnorm` pelo player MPV do Anki durante a reprodução.
+Quando ativada, a extensão aplica `loudnorm` pelo player MPV do Anki durante a reprodução.
 
 - Loudness alvo: **-50 até -20 LUFS**.
 - Padrão: **-24 LUFS**.
@@ -212,7 +227,7 @@ Ele continua salvo depois de fechar o Anki ou reiniciar o computador.
 
 #### Métodos de análise
 
-A extensão agora possui três modos em `analysis_backend`:
+A extensão possui três modos em `analysis_backend`:
 
 ```text
 auto
@@ -224,43 +239,48 @@ webaudio
 
 - Usa o FFmpeg externo quando ele está disponível.
 - Caso o FFmpeg não esteja instalado, usa automaticamente o analisador WebAudio interno.
-- Portanto, a função **Analisar deck** funciona mesmo sem instalar FFmpeg.
+- Portanto, **Analisar deck** funciona mesmo sem instalar FFmpeg.
 
 **`ffmpeg`**
 
 - Usa `loudnorm` do FFmpeg para a análise completa mais precisa.
-- Se o FFmpeg não existir, o painel pode mostrar **Instalar FFmpeg** quando houver um gerenciador de pacotes compatível.
+- Se o FFmpeg não existir e a plataforma for suportada, o painel oferece **Instalar FFmpeg**.
 - A extensão nunca instala programas silenciosamente: a instalação só começa após um clique explícito do usuário.
 
 **`webaudio` / Interno (sem FFmpeg)**
 
 - Não exige um executável FFmpeg externo.
-- Usa o decodificador WebAudio do Qt WebEngine para formatos comuns do Anki, como MP3, OGG e WAV.
-- Usa blocos de 400 ms com 75% de sobreposição, gate absoluto/relativo e uma margem conservadora de segurança para pico.
+- Usa o decodificador WebAudio do Qt WebEngine para os formatos aceitos pela webview do Anki.
+- Usa blocos de 400 ms, medição RMS com gate e cálculo de segurança de pico.
 - A medição é identificada como **aproximada**, pois o WebAudio não oferece a implementação completa de EBU R128/true peak do FFmpeg.
 - É indicado para equilibrar o deck quando o usuário não deseja instalar FFmpeg.
-- Arquivos acima de 8 MB são ignorados pelo analisador interno para evitar transferência excessiva de memória pela webview do revisor.
+- Arquivos acima de **64 MB** são rejeitados pelo analisador interno para evitar uso excessivo de memória.
 
 ### Instalação opcional do FFmpeg
 
-Quando o FFmpeg não está disponível e o sistema possui um instalador compatível, o painel mostra **Instalar FFmpeg**.
+Quando o FFmpeg não está disponível e a plataforma é suportada, o painel mostra **Instalar FFmpeg**.
 
-Instaladores detectados:
+A extensão baixa um pacote de plataforma fixado do `imageio-ffmpeg` e extrai somente o executável FFmpeg para a pasta persistente do add-on:
 
-- Windows: `winget` (`Gyan.FFmpeg`).
-- macOS: Homebrew.
-- Linux: Homebrew ou `APT`, `DNF`, `Pacman` e `Zypper` através de `pkexec`.
+```text
+user_files/tools/ffmpeg/
+```
+
+Isso **não exige administrador/root** e não substitui o FFmpeg instalado no sistema.
 
 Regras de segurança da instalação:
 
 - só inicia após clique explícito do usuário;
-- os comandos são fixos no código e nunca vêm de cartões ou configuração do add-on;
+- URLs de download são fixas no código e usam HTTPS;
+- plataforma, tamanho esperado e SHA-256 são fixados;
+- redirecionamentos para hosts não confiáveis são rejeitados;
+- somente o binário esperado do FFmpeg é extraído;
+- o executável extraído é validado antes de ser usado;
 - processos externos usam lista de argumentos e `shell=False`;
-- existe timeout para o instalador;
 - uma falha nunca impede a reprodução normal do Anki;
 - o analisador interno continua disponível se o usuário recusar ou se a instalação falhar.
 
-Algumas instalações em sandbox, como determinados pacotes Flatpak, podem não expor o gerenciador de pacotes do sistema. Nesses casos a instalação automática não é oferecida e o analisador interno continua funcionando.
+Os downloads gerenciados atualmente suportam Windows x86-64, Linux x86-64, Linux ARM64, macOS Intel e macOS Apple Silicon.
 
 ### Fluxo de Analisar deck
 
@@ -298,15 +318,21 @@ python3 build.py
 
 O pacote é criado em `dist/` contendo somente os arquivos necessários em runtime. Testes, perfis locais e caches não são incluídos.
 
-### Testes Playwright
+### Testes
 
-A interface do revisor e a medição interna possuem testes automatizados em Playwright:
+Testes Python:
+
+```bash
+python -m unittest tests.test_analysis_engine -v
+```
+
+Testes Playwright da interface do revisor:
 
 ```bash
 python tests/test_audio_controller_playwright.py -v
 ```
 
-Se o Chromium não estiver no PATH, defina `BAC_CHROMIUM_EXECUTABLE` ou instale um navegador Chromium pelo Playwright.
+A suíte Playwright valida controles de análise, estado do FFmpeg, medição interna de loudness, rejeição de path traversal e o comportamento de minimizar/expandir o painel.
 
 ## License / Licença
 
