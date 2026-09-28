@@ -220,5 +220,33 @@ class AudioControllerPlaywrightTests(unittest.TestCase):
             page.close()
 
 
+    def test_loudness_slider_commits_only_on_change(self) -> None:
+        page = self.page_with_config(base_config())
+        try:
+            page.evaluate("window.__pycmdMessages=[]")
+            slider = page.locator(".fac-loudness")
+            slider.evaluate(
+                """el => {
+                    el.value = '-30';
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                }"""
+            )
+            self.assertEqual(page.evaluate("window.__pycmdMessages"), [])
+            self.assertEqual(
+                page.locator(".fac-loudness-value").inner_text(), "-30 LUFS"
+            )
+
+            slider.evaluate(
+                """el => el.dispatchEvent(new Event('change', { bubbles: true }))"""
+            )
+            self.assertEqual(
+                page.evaluate("window.__pycmdMessages"),
+                ["ferreis_audio:set:loudness_target:-30"],
+            )
+        finally:
+            page.close()
+
+
+
 if __name__ == "__main__":
     unittest.main()
