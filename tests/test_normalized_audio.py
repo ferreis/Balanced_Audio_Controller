@@ -35,6 +35,22 @@ class NormalizedAudioTests(unittest.TestCase):
         self.assertNotIn(normalized_audio.TEMPLATE_START, removed)
         self.assertIn("{{Front}}", removed)
 
+    def test_detects_original_audio_side_in_template(self) -> None:
+        template = {
+            "qfmt": "<div>{{Áudio 2}}</div>",
+            "afmt": "{{FrontSide}}<hr>{{Meaning}}",
+        }
+        self.assertEqual(
+            normalized_audio.template_sides_for_fields(template, ["Áudio", "Áudio 2"]),
+            ("qfmt",),
+        )
+        self.assertTrue(
+            normalized_audio.template_references_field(template["qfmt"], "Áudio 2")
+        )
+        self.assertFalse(
+            normalized_audio.template_references_field(template["afmt"], "Áudio 2")
+        )
+
     def test_render_uses_argument_list_and_shell_false(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

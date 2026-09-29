@@ -29,6 +29,7 @@ from .normalized_audio import (
     normalized_media_stem,
     remove_template_block,
     render_normalized_audio,
+    template_sides_for_fields,
     upsert_template_block,
 )
 
@@ -80,6 +81,15 @@ def _state(deck_id: int, deck_name: str | None = None) -> dict[str, Any]:
     if isinstance(profile, dict):
         state["profile_backend"] = profile.get("analysis_backend", "ffmpeg")
         state["approximate"] = bool(profile.get("approximate", False))
+        field_setup = profile.get("normalized_field_setup")
+        if isinstance(field_setup, dict):
+            setup_fields = field_setup.get("fields", {})
+            if isinstance(setup_fields, dict):
+                names = sorted({str(name) for name in setup_fields.values() if str(name)})
+                state["normalized_field_count"] = len(names)
+                state["normalized_field_names"] = names
+            state["normalized_template_count"] = int(field_setup.get("template_count", 0) or 0)
+            state["normalized_field_setup_at"] = field_setup.get("updated_at")
         materialized = profile.get("materialized")
         if isinstance(materialized, dict):
             state["materialized_audio_count"] = int(materialized.get("audio_count", 0) or 0)
@@ -360,6 +370,8 @@ def _collect_materialization_plan(deck_id: int, profile: dict[str, Any]) -> dict
     note_cache: dict[int, Any] = {}
     notes: dict[int, dict[str, Any]] = {}
     template_ords: dict[int, set[int]] = {}
+    source_fields: dict[int, set[str]] = {}
+    model_fields: dict[int, list[str]] = {}
 
     for card_id in card_ids:
         card = mw.col.get_card(card_id)
@@ -368,12 +380,30 @@ def _collect_materialization_plan(deck_id: int, profile: dict[str, Any]) -> dict
         if note is None:
             note = mw.col.get_note(card.nid)
             note_cache[note_id] = note
-        relevant = extract_sound_filenames(note.fields) & profile_files
+        mid = int(note.mid)
+        field_names = model_fields.get(mid)
+        if field_names is None:
+            model = mw.col.models.get(mid)
+            if not model:
+                continue
+            field_names = [str(field.get("name", "")) for field in model.get("flds", [])]
+            model_fields[mid] = field_names
+
+        relevant: set[str] = set()
+        relevant_fields: set[str] = set()
+        for index, value in enumerate(note.fields):
+            matches = extract_sound_filenames([value]) & profile_files
+            if not matches:
+                continue
+            relevant.update(matches)
+            if index < len(field_names) and field_names[index]:
+                relevant_fields.add(field_names[index])
+
         if not relevant:
             continue
-        mid = int(note.mid)
         item = notes.setdefault(note_id, {"mid": mid, "sources": set()})
         item["sources"].update(relevant)
+        source_fields.setdefault(mid, set()).update(relevant_fields)
         template_ords.setdefault(mid, set()).add(int(card.ord))
 
     return {
@@ -382,6 +412,7 @@ def _collect_materialization_plan(deck_id: int, profile: dict[str, Any]) -> dict
             for note_id, item in notes.items()
         },
         "template_ords": {mid: sorted(ords) for mid, ords in template_ords.items()},
+        "source_fields": {mid: sorted(fields, key=str.casefold) for mid, fields in source_fields.items()},
         "sources": sorted(
             {source for item in notes.values() for source in item["sources"]},
             key=str.casefold,
@@ -416,6 +447,118 @@ def _choose_normalized_field(
     raise RuntimeError("unable to allocate a safe normalized audio field")
 
 
+def _previous_normalized_fields(profile: dict[str, Any]) -> dict[str, str]:
+    setup = profile.get("normalized_field_setup")
+    if isinstance(setup, dict) and isinstance(setup.get("fields"), dict):
+        return {str(key): str(value) for key, value in setup["fields"].items()}
+    materialized = profile.get("materialized")
+    if isinstance(materialized, dict) and isinstance(materialized.get("fields"), dict):
+        return {str(key): str(value) for key, value in materialized["fields"].items()}
+    return {}
+
+
+def _template_targets_for_model(
+    model: dict[str, Any], ords: list[int], source_fields: list[str]
+) -> dict[str, list[str]]:
+    templates = model.get("tmpls", [])
+    targets: dict[str, list[str]] = {}
+    for raw_ord in ords:
+        if not templates:
+            continue
+        template_index = raw_ord if 0 <= raw_ord < len(templates) else 0
+        template = templates[template_index]
+        sides = list(template_sides_for_fields(template, source_fields))
+        # Compatibilidade: quando não for possível detectar a referência original,
+        # mantém o comportamento seguro anterior e usa o verso.
+        if not sides:
+            sides = ["afmt"]
+        targets[str(template_index)] = sides
+    return targets
+
+
+def _ensure_normalized_fields_and_templates(
+    plan: dict[str, Any], insert_template: bool, profile: dict[str, Any]
+) -> tuple[dict[str, str], int, int, dict[str, dict[str, list[str]]]]:
+    notes = plan["notes"]
+    by_mid: dict[int, list[int]] = {}
+    for note_id, item in notes.items():
+        by_mid.setdefault(int(item["mid"]), []).append(int(note_id))
+
+    previous_fields = _previous_normalized_fields(profile)
+    fields: dict[str, str] = {}
+    created_fields = 0
+    template_changes = 0
+    all_targets: dict[str, dict[str, list[str]]] = {}
+
+    for mid, note_ids in by_mid.items():
+        model = mw.col.models.get(mid)
+        if not model:
+            continue
+        previous = previous_fields.get(str(mid))
+        field_name, create_field = _choose_normalized_field(model, note_ids, previous)
+        changed = False
+        if create_field:
+            mw.col.models.add_field(model, mw.col.models.new_field(field_name))
+            created_fields += 1
+            changed = True
+
+        targets = _template_targets_for_model(
+            model,
+            plan["template_ords"].get(mid, []),
+            plan.get("source_fields", {}).get(mid, []),
+        )
+        all_targets[str(mid)] = targets
+        templates = model.get("tmpls", [])
+        for raw_index, sides in targets.items():
+            template_index = int(raw_index)
+            if template_index < 0 or template_index >= len(templates):
+                continue
+            template = templates[template_index]
+            for side in ("qfmt", "afmt"):
+                current = str(template.get(side, ""))
+                cleaned = remove_template_block(current)
+                updated = (
+                    upsert_template_block(cleaned, field_name)
+                    if insert_template and side in sides
+                    else cleaned
+                )
+                if updated != current:
+                    template[side] = updated
+                    template_changes += 1
+                    changed = True
+        if changed:
+            mw.col.models.update_dict(model)
+        fields[str(mid)] = field_name
+
+    return fields, created_fields, template_changes, all_targets
+
+
+def _store_field_setup(
+    deck_id: int,
+    profile: dict[str, Any],
+    fields: dict[str, str],
+    insert_template: bool,
+    targets: dict[str, dict[str, list[str]]],
+) -> dict[str, Any]:
+    core = _core()
+    current_profile = core._get_deck_profile(deck_id) or dict(profile)
+    template_count = (
+        sum(len(sides) for by_template in targets.values() for sides in by_template.values())
+        if insert_template
+        else 0
+    )
+    current_profile["normalized_field_setup"] = {
+        "version": 1,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "fields": fields,
+        "insert_template": bool(insert_template),
+        "template_count": template_count,
+        "targets": targets,
+    }
+    core._set_deck_profile(deck_id, current_profile)
+    return current_profile
+
+
 def _apply_materialization(
     deck_id: int,
     deck_name: str,
@@ -425,39 +568,12 @@ def _apply_materialization(
     profile: dict[str, Any],
 ) -> tuple[int, dict[str, str]]:
     notes = plan["notes"]
-    by_mid: dict[int, list[int]] = {}
-    for note_id, item in notes.items():
-        by_mid.setdefault(int(item["mid"]), []).append(int(note_id))
-
-    previous_materialized = profile.get("materialized") if isinstance(profile.get("materialized"), dict) else {}
-    previous_fields = previous_materialized.get("fields", {}) if isinstance(previous_materialized, dict) else {}
-    fields: dict[str, str] = {}
-
-    for mid, note_ids in by_mid.items():
-        model = mw.col.models.get(mid)
-        if not model:
-            continue
-        previous = previous_fields.get(str(mid)) if isinstance(previous_fields, dict) else None
-        field_name, create_field = _choose_normalized_field(model, note_ids, str(previous) if previous else None)
-        changed = False
-        if create_field:
-            mw.col.models.add_field(model, mw.col.models.new_field(field_name))
-            changed = True
-
-        templates = model.get("tmpls", [])
-        for raw_ord in plan["template_ords"].get(mid, []):
-            if not templates:
-                continue
-            template_index = raw_ord if 0 <= raw_ord < len(templates) else 0
-            template = templates[template_index]
-            current = str(template.get("afmt", ""))
-            updated = upsert_template_block(current, field_name) if insert_template else remove_template_block(current)
-            if updated != current:
-                template["afmt"] = updated
-                changed = True
-        if changed:
-            mw.col.models.update_dict(model)
-        fields[str(mid)] = field_name
+    fields, _created_fields, _template_changes, targets = _ensure_normalized_fields_and_templates(
+        plan, insert_template, profile
+    )
+    current_profile = _store_field_setup(
+        deck_id, profile, fields, insert_template, targets
+    )
 
     updated_notes = 0
     for raw_note_id, item in notes.items():
@@ -480,8 +596,8 @@ def _apply_materialization(
             mw.col.update_note(note)
         updated_notes += 1
 
-    refreshed = core = _core()
-    current_profile = core._get_deck_profile(deck_id) or dict(profile)
+    core = _core()
+    current_profile = core._get_deck_profile(deck_id) or current_profile
     current_profile["materialized"] = {
         "version": 1,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -493,6 +609,50 @@ def _apply_materialization(
     }
     core._set_deck_profile(deck_id, current_profile)
     return updated_notes, fields
+
+
+def _prepare_normalized_field_setup(context) -> None:
+    core = _core()
+    current = _current_deck(context)
+    if not current:
+        return
+    deck_id, deck_name = current
+    lang = _lang()
+    if core._analysis_is_running(deck_id) or _state(deck_id, deck_name).get("materializing"):
+        return
+
+    profile = core._get_deck_profile(deck_id)
+    if not isinstance(profile, dict) or not profile.get("files"):
+        state = _state(deck_id, deck_name)
+        state["error"] = t(lang, "field_setup_profile_required")
+        _push_state(state)
+        return
+
+    plan = _collect_materialization_plan(deck_id, profile)
+    if not plan["notes"]:
+        state = _state(deck_id, deck_name)
+        state["error"] = t(lang, "field_setup_no_linked_audio")
+        _push_state(state)
+        return
+
+    insert_template = bool(_conf().get("normalized_audio_insert_template", True))
+    fields, _created, _changes, targets = _ensure_normalized_fields_and_templates(
+        plan, insert_template, profile
+    )
+    _store_field_setup(deck_id, profile, fields, insert_template, targets)
+    template_count = (
+        sum(len(sides) for by_template in targets.values() for sides in by_template.values())
+        if insert_template
+        else 0
+    )
+    state = _state(deck_id, deck_name)
+    state["message"] = t(
+        lang,
+        "field_setup_done",
+        fields=len(set(fields.values())),
+        templates=template_count,
+    )
+    _push_state(state)
 
 
 def _start_materialization(context) -> None:
@@ -695,6 +855,8 @@ def _on_message(handled, message: str, context):
         _start_analysis(context); return (True, None)
     if message == "ferreis_audio:v010:ffmpeg:install":
         _install_ffmpeg(); return (True, None)
+    if message == "ferreis_audio:v010:prepare-field":
+        _prepare_normalized_field_setup(context); return (True, None)
     if message == "ferreis_audio:v010:materialize":
         _start_materialization(context); return (True, None)
     if message.startswith("ferreis_audio:v010:materialize:insert:"):
