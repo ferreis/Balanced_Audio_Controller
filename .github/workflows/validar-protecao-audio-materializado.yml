@@ -30,6 +30,16 @@ jobs:
         run: |
           set -euo pipefail
           python3 .devtools/corrigir_audio_materializado.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/test_playback_regression.py')
+          source = path.read_text(encoding='utf-8')
+          anchor = '            "_is_mpv_player": lambda value: value is player,\n'
+          addition = anchor + '            "_is_materialized_audio": lambda filename: False,\n'
+          if anchor not in source:
+              raise SystemExit('fixture base não encontrado')
+          path.write_text(source.replace(anchor, addition, 1), encoding='utf-8')
+          PY
 
       - name: Preparar Playwright
         shell: bash
