@@ -802,3 +802,10 @@ gui_hooks.webview_will_set_content.append(_on_webview_will_set_content)
 gui_hooks.webview_did_receive_js_message.append(_on_js_message)
 gui_hooks.av_player_will_play.append(_on_av_player_will_play)
 gui_hooks.av_player_did_end_playing.append(_on_av_player_did_end_playing)
+
+# Carrega a extensão somente após o núcleo concluir a própria inicialização.
+# Isso evita importação circular entre __init__, i18n e v010.
+try:
+    from . import v010 as _v010  # noqa: F401,E402
+except Exception as _v010_error:
+    print("[Balanced Audio Controller] v0.10 extension load failed:", _v010_error)

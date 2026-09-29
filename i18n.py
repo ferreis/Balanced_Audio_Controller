@@ -324,10 +324,3 @@ def t(language: str, key: str, **values: Any) -> str:
 
 def web_strings(language: str) -> dict[str, str]:
     return {key: t(language, key) for key in WEB_TRANSLATION_KEYS}
-
-# v0.10 is loaded from i18n because this module is imported during add-on startup.
-# The extension registers only dev-branch hooks and leaves the stable playback core intact.
-try:
-    from . import v010 as _v010  # noqa: F401,E402
-except Exception as _v010_error:
-    print("[Balanced Audio Controller] v0.10 extension load failed:", _v010_error)

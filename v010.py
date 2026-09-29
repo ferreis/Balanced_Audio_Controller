@@ -1002,10 +1002,10 @@ def _open_settings_dialog() -> None:
     qconnect(materialize_button.clicked, lambda: run_action(_start_materialization))
     qconnect(clear_button.clicked, lambda: run_action(_clear_current_deck_profile))
 
-    buttons = QDialogButtonBox(
-        QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel,
-        parent=dialog,
+    button_flags = (
+        QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
     )
+    buttons = QDialogButtonBox(button_flags)
 
     def save_and_close() -> None:
         apply_settings()
