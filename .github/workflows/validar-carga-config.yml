@@ -1,0 +1,82 @@
+# Workflow temporário exclusivo da branch dev.
+# Descrição: corrige e valida a ordem de carga da extensão v0.10 para que o
+# menu de configurações em Ferramentas seja registrado sem importação circular.
+name: Validar inicialização das configurações
+run-name: Validar carga do menu de configurações
+
+on:
+  push:
+    branches:
+      - dev
+
+permissions:
+  contents: write
+
+jobs:
+  validar:
+    name: Corrigir, testar e auditar inicialização
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Obter código da branch dev
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Corrigir ordem de carga
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .devtools/corrigir_carga_config.py
+
+      - name: Preparar Playwright
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --disable-pip-version-check --no-cache-dir 'playwright==1.63.0'
+          .venv/bin/python -m playwright install --with-deps chromium
+
+      - name: Executar testes e pacote
+        shell: bash
+        run: |
+          set -euo pipefail
+          .venv/bin/python -m compileall -q __init__.py analysis_engine.py normalized_audio.py i18n.py v010.py tests
+          .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
+          .venv/bin/python build.py
+          test -f dist/Balanced_Audio_Controller-v0.10.0.ankiaddon
+
+      - name: Validar segurança
+        shell: bash
+        run: |
+          set -euo pipefail
+          .venv/bin/python - <<'PY'
+          import ast
+          from pathlib import Path
+          problemas = []
+          for arquivo in [Path('__init__.py'), Path('analysis_engine.py'), Path('normalized_audio.py'), Path('v010.py')]:
+              arvore = ast.parse(arquivo.read_text(encoding='utf-8'), filename=str(arquivo))
+              for no in ast.walk(arvore):
+                  if isinstance(no, ast.Call):
+                      for kw in no.keywords:
+                          if kw.arg == 'shell' and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                              problemas.append(f'{arquivo}:{getattr(no, "lineno", "?")}: shell=True')
+          if problemas:
+              raise SystemExit('\n'.join(problemas))
+          print('Validação de segurança concluída sem violações detectadas.')
+          PY
+
+      - name: Registrar correção na branch dev
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Rafael Fernando dos reis Mecabô"
+          git config user.email "rafa_ferreis@hotmail.com"
+          git add __init__.py i18n.py v010.py tests/test_extension_loading.py
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "Nenhuma alteração pendente."
+            exit 0
+          fi
+          git commit -m "fix: carregar menu de configurações após o núcleo"
+          git push origin HEAD:dev
