@@ -59,8 +59,8 @@
     "normalized_audio_insert_template": {
       "type": "boolean",
       "default": true,
-      "title": "Insert normalized audio on card back / Inserir áudio normalizado no verso do card",
-      "description": "When materializing normalized copies, add the dedicated BAC normalized-audio field to affected card back templates. / Ao materializar cópias normalizadas, adiciona o campo dedicado de áudio normalizado do BAC aos templates do verso dos cards afetados."
+      "title": "Insert normalized audio in card HTML / Inserir áudio normalizado no HTML do card",
+      "description": "Insert the dedicated BAC normalized-audio field on the same card side where the original audio field is referenced. / Insere o campo dedicado de áudio normalizado do BAC na mesma face do card em que o campo de áudio original é referenciado."
     }
   }
 }

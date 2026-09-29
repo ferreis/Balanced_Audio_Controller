@@ -76,6 +76,26 @@ def _validated_field_name(field_name: str) -> str:
     return value
 
 
+def template_references_field(html: str, field_name: str) -> bool:
+    field = _validated_field_name(field_name)
+    pattern = re.compile(
+        r"\{\{\s*(?:[#/^]\s*)?" + re.escape(field) + r"\s*\}\}",
+    )
+    return bool(pattern.search(str(html or "")))
+
+
+def template_sides_for_fields(
+    template: dict[str, Any], field_names: Iterable[str]
+) -> tuple[str, ...]:
+    fields = [str(name).strip() for name in field_names if str(name).strip()]
+    sides: list[str] = []
+    for side in ("qfmt", "afmt"):
+        html = str(template.get(side, ""))
+        if any(template_references_field(html, field) for field in fields):
+            sides.append(side)
+    return tuple(sides)
+
+
 def template_block(field_name: str) -> str:
     field = _validated_field_name(field_name)
     return (

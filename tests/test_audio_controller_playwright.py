@@ -52,10 +52,16 @@ I18N = {
     "profile_method_ffmpeg": "FFmpeg profile",
     "profile_method_webaudio": "Built-in approximate profile",
     "preparing_analysis": "Preparing analysis...",
+    "prepare_normalized_field": "Create audio field + update card HTML",
+    "prepare_normalized_field_hint": "Prepare field",
+    "normalized_field_ready": "{fields} field(s), {templates} template side(s)",
+    "field_setup_profile_required": "Analyze first",
+    "field_setup_no_linked_audio": "No linked audio",
+    "field_setup_done": "Field ready",
     "materialize_audio": "Create normalized copies",
     "materializing_audio": "Creating normalized copies...",
     "materialize_hint": "Create files",
-    "insert_normalized_template": "Insert normalized audio on card back",
+    "insert_normalized_template": "Insert normalized field in card HTML",
     "insert_normalized_template_hint": "Insert field",
     "materialize_requires_ffmpeg": "FFmpeg required",
     "materialize_profile_stale": "Reanalyze first",
@@ -254,6 +260,42 @@ class AudioControllerPlaywrightTests(unittest.TestCase):
         finally:
             page.close()
 
+
+    def test_prepare_field_and_html_does_not_require_ffmpeg(self) -> None:
+        page = self.page_with_config(base_config())
+        try:
+            prepare = page.locator(".fac-prepare-normalized-field")
+            materialize = page.locator(".fac-materialize-normalized")
+            self.assertTrue(prepare.is_disabled())
+            self.assertTrue(materialize.is_disabled())
+
+            page.evaluate(
+                """window.BACV010.updateState({
+                    exists: true,
+                    stale: false,
+                    ffmpeg: { available: false, installing: false, installer_available: true },
+                    insert_normalized_template: true
+                })"""
+            )
+            self.assertFalse(prepare.is_disabled())
+            self.assertTrue(materialize.is_disabled())
+
+            page.evaluate("window.__pycmdMessages=[]")
+            prepare.click()
+            self.assertIn(
+                "ferreis_audio:v010:prepare-field",
+                page.evaluate("window.__pycmdMessages"),
+            )
+
+            page.evaluate(
+                """window.BACV010.updateState({
+                    normalized_field_count: 1,
+                    normalized_template_count: 1
+                })"""
+            )
+            self.assertIn("1 field(s)", page.locator(".fac-field-setup-note").inner_text())
+        finally:
+            page.close()
 
     def test_materialize_controls_require_profile_and_ffmpeg(self) -> None:
         config = base_config()

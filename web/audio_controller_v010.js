@@ -60,6 +60,8 @@
           <input class="fac-materialize-template" type="checkbox">
           <span>${t("insert_normalized_template")}</span>
         </label>
+        <button class="fac-action fac-prepare-normalized-field" type="button">${t("prepare_normalized_field")}</button>
+        <div class="fac-field-setup-note"></div>
         <button class="fac-action fac-materialize-normalized" type="button">${t("materialize_audio")}</button>
         <div class="fac-materialize-note"></div>
       `;
@@ -83,6 +85,9 @@
       });
       this.root.querySelector(".fac-install-ffmpeg").addEventListener("click", () => {
         pycmd("ferreis_audio:v010:ffmpeg:install");
+      });
+      this.root.querySelector(".fac-prepare-normalized-field").addEventListener("click", () => {
+        pycmd("ferreis_audio:v010:prepare-field");
       });
       this.root.querySelector(".fac-materialize-normalized").addEventListener("click", () => {
         this.state.materializing = true;
@@ -213,10 +218,12 @@
       const status = this.root.querySelector(".fac-engine-status");
       const install = this.root.querySelector(".fac-install-ffmpeg");
       const note = this.root.querySelector(".fac-engine-note");
+      const prepareField = this.root.querySelector(".fac-prepare-normalized-field");
+      const fieldSetupNote = this.root.querySelector(".fac-field-setup-note");
       const materialize = this.root.querySelector(".fac-materialize-normalized");
       const materializeTemplate = this.root.querySelector(".fac-materialize-template");
       const materializeNote = this.root.querySelector(".fac-materialize-note");
-      if (!select || !status || !install || !note || !materialize || !materializeTemplate || !materializeNote) return;
+      if (!select || !status || !install || !note || !prepareField || !fieldSetupNote || !materialize || !materializeTemplate || !materializeNote) return;
 
       select.value = this.state.analysis_backend || "auto";
       select.disabled = Boolean(this.state.analyzing || this.state.ffmpeg?.installing);
@@ -238,6 +245,20 @@
 
       materializeTemplate.checked = this.state.insert_normalized_template !== false;
       materializeTemplate.disabled = Boolean(this.state.materializing || this.state.analyzing);
+      prepareField.disabled = Boolean(
+        this.state.materializing ||
+        this.state.analyzing ||
+        !this.state.exists
+      );
+      prepareField.textContent = t("prepare_normalized_field");
+      if (Number(this.state.normalized_field_count || 0) > 0) {
+        fieldSetupNote.textContent = t("normalized_field_ready", {
+          fields: Number(this.state.normalized_field_count || 0),
+          templates: Number(this.state.normalized_template_count || 0),
+        });
+      } else {
+        fieldSetupNote.textContent = t("prepare_normalized_field_hint");
+      }
       materialize.disabled = Boolean(
         this.state.materializing ||
         this.state.analyzing ||
