@@ -31,6 +31,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 .devtools/preparar_preview_audio.py
           python3 .devtools/adicionar_preview_audio.py
           python3 .devtools/complementar_preview_audio.py
 
