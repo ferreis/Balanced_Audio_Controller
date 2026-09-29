@@ -285,6 +285,7 @@ def parse_loudnorm_json(stderr: str) -> dict[str, float] | None:
             "input_tp": float(raw["input_tp"]),
             "input_lra": float(raw.get("input_lra", 0.0)),
             "input_thresh": float(raw.get("input_thresh", 0.0)),
+            "target_offset": float(raw.get("target_offset", 0.0)),
         }
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None

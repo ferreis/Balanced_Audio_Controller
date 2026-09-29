@@ -32,13 +32,16 @@ AUDIO_EXTENSIONS = {
 
 NORMALIZE_FILTER_NAME = "@ferreis_normalize"
 DECK_GAIN_FILTER_NAME = "@ferreis_deck_gain"
+MATERIALIZED_AUDIO_PREFIX = "bac_norm_"
 TRUE_PEAK_LIMIT = -1.5
 LRA_TARGET = 7.0
 PROFILE_FILE_VERSION = 1
 
 _PROFILE_LOCK = threading.Lock()
 _ANALYSIS_LOCK = threading.Lock()
+_PLAYBACK_LOCK = threading.RLock()
 _ANALYSIS_RUNNING: set[str] = set()
+_CURRENT_AUDIO_FILENAME: str | None = None
 
 
 def _config() -> dict[str, Any]:
@@ -95,6 +98,17 @@ def _current_reviewer_card():
 def _current_reviewer_deck_id() -> int | None:
     card = _current_reviewer_card()
     return _card_deck_id(card) if card else None
+
+def _current_audio_filename() -> str | None:
+    with _PLAYBACK_LOCK:
+        return _CURRENT_AUDIO_FILENAME
+
+
+def _set_current_audio_filename(filename: str | None) -> None:
+    global _CURRENT_AUDIO_FILENAME
+    with _PLAYBACK_LOCK:
+        _CURRENT_AUDIO_FILENAME = filename
+
 
 
 def _profiles_path() -> Path:
@@ -166,6 +180,13 @@ def _remove_filter(player: Any, filter_name: str) -> None:
         pass
 
 
+def _is_materialized_audio(filename: str | None) -> bool:
+    if not filename:
+        return False
+    basename = Path(str(filename).replace("\\", "/")).name
+    return basename.casefold().startswith(MATERIALIZED_AUDIO_PREFIX.casefold())
+
+
 def _normalizer_filter(conf: dict[str, Any]) -> str:
     target = max(-50.0, min(-20.0, float(conf.get("loudness_target", -24.0))))
     dual_mono = "true" if bool(conf.get("dual_mono", False)) else "false"
@@ -208,7 +229,10 @@ def _profile_entry_for_current_deck(
 
 
 def _apply_native_settings(
-    player: Any | None = None, filename: str | None = None
+    player: Any | None = None,
+    filename: str | None = None,
+    *,
+    update_filters: bool = True,
 ) -> tuple[bool, str]:
     conf = _config()
     lang = _language(conf)
@@ -228,8 +252,23 @@ def _apply_native_settings(
         print("[Balanced Audio Controller] unable to set MPV speed/volume:", exc)
         return False, t(lang, "status_mpv_control_failed")
 
+    # Alterar velocidade/volume não deve reconstruir o grafo de filtros do MPV.
+    # Recriar loudnorm durante a reprodução causa cortes audíveis e também pode
+    # substituir indevidamente o ganho específico do arquivo analisado.
+    if not update_filters:
+        return True, ""
+
+    if filename is None:
+        filename = _current_audio_filename()
+
     _remove_filter(player, NORMALIZE_FILTER_NAME)
     _remove_filter(player, DECK_GAIN_FILTER_NAME)
+
+    # Cópias bac_norm_* já foram normalizadas fisicamente em disco. Aplicar
+    # loudnorm ou ganho do perfil novamente distorceria o resultado e poderia
+    # provocar uma segunda normalização desnecessária.
+    if _is_materialized_audio(filename):
+        return True, t(lang, "status_materialized_audio")
 
     profile, entry = _profile_entry_for_current_deck(filename, conf)
     if entry is not None:
@@ -267,7 +306,6 @@ def _apply_native_settings(
             )
 
     return True, t(lang, "status_normalization_off", prefix=profile_note)
-
 
 def _tag_filename(tag: Any) -> str | None:
     if isinstance(tag, SoundOrVideoTag):
@@ -438,6 +476,7 @@ def _collect_deck_audio_files(deck_id: int) -> tuple[str, list[str]]:
         files.update(_audio_filenames(card.question_av_tags()))
         files.update(_audio_filenames(card.answer_av_tags()))
 
+    files = {filename for filename in files if not _is_materialized_audio(filename)}
     return deck_name, sorted(files, key=str.casefold)
 
 
@@ -617,10 +656,19 @@ def _start_deck_analysis(context: aqt.reviewer.Reviewer) -> None:
     mw.taskman.run_in_background(worker, on_done)
 
 
-def _on_av_player_did_begin_playing(player: Any, tag: Any) -> None:
+def _on_av_player_will_play(tag: Any) -> None:
+    # O Anki define current_player antes deste hook e só chama player.play()
+    # depois. Assim o filtro já está pronto quando o arquivo começa a tocar.
     filename = _tag_filename(tag)
+    _set_current_audio_filename(filename)
+    player = av_player.current_player
     _supported, status = _apply_native_settings(player, filename)
-    _push_status(status)
+    if status:
+        _push_status(status)
+
+
+def _on_av_player_did_end_playing(player: Any) -> None:
+    _set_current_audio_filename(None)
 
 
 def _on_card_will_show(text: str, card, kind: str) -> str:
@@ -680,6 +728,11 @@ def _on_js_message(handled, message: str, context):
             deck_id = _card_deck_id(card)
             _clear_deck_profile(deck_id)
             _push_deck_profile_state(_deck_profile_summary(deck_id))
+            _supported, status = _apply_native_settings(
+                filename=_current_audio_filename()
+            )
+            if status:
+                _push_status(status)
         return (True, None)
 
     if message.startswith("ferreis_audio:deck:enable:"):
@@ -689,6 +742,11 @@ def _on_js_message(handled, message: str, context):
         card = getattr(context, "card", None) or _current_reviewer_card()
         if card:
             _push_deck_profile_state(_deck_profile_summary(_card_deck_id(card)))
+        _supported, status = _apply_native_settings(
+            filename=_current_audio_filename()
+        )
+        if status:
+            _push_status(status)
         return (True, None)
 
     if not message.startswith("ferreis_audio:set:"):
@@ -720,12 +778,17 @@ def _on_js_message(handled, message: str, context):
         else:
             return handled
 
-        _supported, status = _apply_native_settings()
-        context.web.eval(
-            "window.FerreisAnkiAudio && window.FerreisAnkiAudio.setStatus("
-            + json.dumps(status, ensure_ascii=False)
-            + ");"
+        update_filters = key in {"normalize", "loudness_target", "dual_mono"}
+        _supported, status = _apply_native_settings(
+            filename=_current_audio_filename(),
+            update_filters=update_filters,
         )
+        if status:
+            context.web.eval(
+                "window.FerreisAnkiAudio && window.FerreisAnkiAudio.setStatus("
+                + json.dumps(status, ensure_ascii=False)
+                + ");"
+            )
         return (True, None)
     except Exception as exc:
         print("[Balanced Audio Controller] setting error:", exc)
@@ -737,4 +800,5 @@ mw.addonManager.setWebExports(__name__, r"web/.*\.(css|js)")
 gui_hooks.card_will_show.append(_on_card_will_show)
 gui_hooks.webview_will_set_content.append(_on_webview_will_set_content)
 gui_hooks.webview_did_receive_js_message.append(_on_js_message)
-gui_hooks.av_player_did_begin_playing.append(_on_av_player_did_begin_playing)
+gui_hooks.av_player_will_play.append(_on_av_player_will_play)
+gui_hooks.av_player_did_end_playing.append(_on_av_player_did_end_playing)

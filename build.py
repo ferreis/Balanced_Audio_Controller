@@ -10,6 +10,7 @@ DIST = ROOT / "dist"
 INCLUDE_FILES = [
     "__init__.py",
     "analysis_engine.py",
+    "normalized_audio.py",
     "v010.py",
     "i18n.py",
     "config.json",

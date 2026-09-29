@@ -6,5 +6,6 @@
   "speed": 1.0,
   "volume": 1.0,
   "deck_profile_enabled": false,
-  "analysis_backend": "auto"
+  "analysis_backend": "auto",
+  "normalized_audio_insert_template": true
 }

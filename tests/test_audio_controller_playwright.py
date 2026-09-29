@@ -52,6 +52,14 @@ I18N = {
     "profile_method_ffmpeg": "FFmpeg profile",
     "profile_method_webaudio": "Built-in approximate profile",
     "preparing_analysis": "Preparing analysis...",
+    "materialize_audio": "Create normalized copies",
+    "materializing_audio": "Creating normalized copies...",
+    "materialize_hint": "Create files",
+    "insert_normalized_template": "Insert normalized audio on card back",
+    "insert_normalized_template_hint": "Insert field",
+    "materialize_requires_ffmpeg": "FFmpeg required",
+    "materialize_profile_stale": "Reanalyze first",
+    "materialized_summary": "{count} normalized file(s) linked to {notes} note(s)",
     "native_player": "Anki native player",
     "audio_count": "{count} audio file(s)",
     "failure_count": "{count} failure(s)",
@@ -218,6 +226,68 @@ class AudioControllerPlaywrightTests(unittest.TestCase):
             self.assertIsNone(rejected)
         finally:
             page.close()
+
+
+    def test_loudness_slider_commits_only_on_change(self) -> None:
+        page = self.page_with_config(base_config())
+        try:
+            page.evaluate("window.__pycmdMessages=[]")
+            slider = page.locator(".fac-loudness")
+            slider.evaluate(
+                """el => {
+                    el.value = '-30';
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                }"""
+            )
+            self.assertEqual(page.evaluate("window.__pycmdMessages"), [])
+            self.assertEqual(
+                page.locator(".fac-loudness-value").inner_text(), "-30 LUFS"
+            )
+
+            slider.evaluate(
+                """el => el.dispatchEvent(new Event('change', { bubbles: true }))"""
+            )
+            self.assertEqual(
+                page.evaluate("window.__pycmdMessages"),
+                ["ferreis_audio:set:loudness_target:-30"],
+            )
+        finally:
+            page.close()
+
+
+    def test_materialize_controls_require_profile_and_ffmpeg(self) -> None:
+        config = base_config()
+        page = self.page_with_config(config)
+        try:
+            button = page.locator(".fac-materialize-normalized")
+            checkbox = page.locator(".fac-materialize-template")
+            self.assertTrue(button.is_disabled())
+            self.assertTrue(checkbox.is_checked())
+            self.assertEqual(page.locator(".fac-materialize-note").inner_text(), "FFmpeg required")
+
+            page.evaluate(
+                """window.BACV010.updateState({
+                    exists: true,
+                    stale: false,
+                    ffmpeg: { available: true, installing: false, installer_available: true },
+                    insert_normalized_template: true
+                })"""
+            )
+            self.assertFalse(button.is_disabled())
+            page.evaluate("window.__pycmdMessages=[]")
+            button.click()
+            self.assertIn("ferreis_audio:v010:materialize", page.evaluate("window.__pycmdMessages"))
+
+            page.evaluate("window.BACV010.updateState({ materializing: false, analyzing: false })")
+            checkbox.uncheck()
+            self.assertIn(
+                "ferreis_audio:v010:materialize:insert:0",
+                page.evaluate("window.__pycmdMessages"),
+            )
+        finally:
+            page.close()
+
+
 
 
 if __name__ == "__main__":

@@ -182,6 +182,12 @@
         const value = clamp(Number(loudness.value), -50, -20);
         this.config.loudness_target = value;
         this.updateLoudnessValue(value);
+      });
+
+      loudness.addEventListener("change", () => {
+        const value = clamp(Number(loudness.value), -50, -20);
+        this.config.loudness_target = value;
+        this.updateLoudnessValue(value);
         pycmd(`ferreis_audio:set:loudness_target:${value}`);
       });
 

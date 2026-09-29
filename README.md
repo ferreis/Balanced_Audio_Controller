@@ -337,3 +337,13 @@ A suíte Playwright valida controles de análise, estado do FFmpeg, medição in
 ## License / Licença
 
 MIT License.
+
+## Materialized normalized audio / Áudio normalizado materializado
+
+After a deck has been analyzed, **Create normalized copies / Criar cópias normalizadas** can render a second, already-normalized audio file for each analyzed source. This operation requires FFmpeg because it writes real audio files; the built-in WebAudio analyzer remains available for analysis only.
+
+The original media is never overwritten. Generated files use a deterministic `bac_norm_...` name and are imported through Anki's media manager. The add-on creates a dedicated **BAC Áudio Normalizado** note field (or a numbered alternative if that name is already used by unrelated content), writes native `[sound:...]` references into it, and can automatically add that field to the back template of the affected card types.
+
+Depois que o deck for analisado, **Criar cópias normalizadas** pode gerar um segundo arquivo de áudio já normalizado para cada áudio analisado. Essa operação exige FFmpeg porque grava arquivos de áudio reais; o analisador WebAudio interno continua disponível para análise sem FFmpeg.
+
+A mídia original nunca é sobrescrita. Os arquivos gerados usam nomes determinísticos `bac_norm_...` e são importados pelo gerenciador de mídia do Anki. O add-on cria um campo dedicado **BAC Áudio Normalizado** na nota (ou uma alternativa numerada caso esse nome já contenha dados não relacionados), grava referências nativas `[sound:...]` nele e pode inserir automaticamente esse campo no template do verso dos tipos de card afetados.

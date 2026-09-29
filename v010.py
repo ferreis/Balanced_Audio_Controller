@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import math
 import secrets
+import shutil
 import sys
+import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +18,19 @@ from aqt.webview import WebContent
 
 from .analysis_engine import ffmpeg_status, find_ffmpeg, install_managed_ffmpeg, measure_with_ffmpeg, resolve_backend
 from .i18n import t
+from .normalized_audio import (
+    FIELD_BASE_NAME,
+    GENERATED_PREFIX,
+    MAX_OUTPUT_BYTES,
+    extract_sound_filenames,
+    field_value_for_files,
+    file_sha256,
+    is_managed_field_value,
+    normalized_media_stem,
+    remove_template_block,
+    render_normalized_audio,
+    upsert_template_block,
+)
 
 ADDON_ROOT = Path(__file__).resolve().parent
 TRUE_PEAK_LIMIT = -1.5
@@ -23,6 +38,7 @@ LRA_TARGET = 7.0
 _SESSIONS: dict[str, dict[str, Any]] = {}
 _LOCK = threading.RLock()
 _INSTALLING = False
+_MATERIALIZING: set[str] = set()
 
 
 def _core():
@@ -51,15 +67,24 @@ def _state(deck_id: int, deck_name: str | None = None) -> dict[str, Any]:
     conf = _conf()
     ffmpeg = _ffmpeg_state()
     configured = str(conf.get("analysis_backend", "auto"))
+    with _LOCK:
+        materializing = str(deck_id) in _MATERIALIZING
     state.update({
         "analysis_backend": configured,
         "resolved_backend": resolve_backend(configured, bool(ffmpeg["available"])),
         "ffmpeg": ffmpeg,
+        "materializing": materializing,
+        "insert_normalized_template": bool(conf.get("normalized_audio_insert_template", True)),
     })
     profile = core._get_deck_profile(deck_id)
     if isinstance(profile, dict):
         state["profile_backend"] = profile.get("analysis_backend", "ffmpeg")
         state["approximate"] = bool(profile.get("approximate", False))
+        materialized = profile.get("materialized")
+        if isinstance(materialized, dict):
+            state["materialized_audio_count"] = int(materialized.get("audio_count", 0) or 0)
+            state["materialized_note_count"] = int(materialized.get("note_count", 0) or 0)
+            state["materialized_at"] = materialized.get("created_at")
     return state
 
 
@@ -307,6 +332,316 @@ def _handle_done(message: str) -> None:
     _push_state(state)
 
 
+
+def _materializing(deck_id: int, value: bool) -> None:
+    with _LOCK:
+        key = str(deck_id)
+        if value:
+            _MATERIALIZING.add(key)
+        else:
+            _MATERIALIZING.discard(key)
+
+
+def _collect_materialization_plan(deck_id: int, profile: dict[str, Any]) -> dict[str, Any]:
+    core = _core()
+    files = profile.get("files", {})
+    if not isinstance(files, dict) or not files:
+        return {"notes": {}, "template_ords": {}, "sources": []}
+    profile_files = {
+        str(name)
+        for name in files
+        if not Path(str(name).replace("\\", "/")).name.casefold().startswith(
+            GENERATED_PREFIX.casefold()
+        )
+    }
+    deck_name = core._deck_name(deck_id)
+    search_name = deck_name.replace("\\", "\\\\").replace('"', '\\"')
+    card_ids = mw.col.find_cards(f'deck:"{search_name}"')
+    note_cache: dict[int, Any] = {}
+    notes: dict[int, dict[str, Any]] = {}
+    template_ords: dict[int, set[int]] = {}
+
+    for card_id in card_ids:
+        card = mw.col.get_card(card_id)
+        note_id = int(card.nid)
+        note = note_cache.get(note_id)
+        if note is None:
+            note = mw.col.get_note(card.nid)
+            note_cache[note_id] = note
+        relevant = extract_sound_filenames(note.fields) & profile_files
+        if not relevant:
+            continue
+        mid = int(note.mid)
+        item = notes.setdefault(note_id, {"mid": mid, "sources": set()})
+        item["sources"].update(relevant)
+        template_ords.setdefault(mid, set()).add(int(card.ord))
+
+    return {
+        "notes": {
+            note_id: {"mid": item["mid"], "sources": sorted(item["sources"], key=str.casefold)}
+            for note_id, item in notes.items()
+        },
+        "template_ords": {mid: sorted(ords) for mid, ords in template_ords.items()},
+        "sources": sorted(
+            {source for item in notes.values() for source in item["sources"]},
+            key=str.casefold,
+        ),
+    }
+
+
+def _choose_normalized_field(
+    model: dict[str, Any], note_ids: list[int], previous: str | None
+) -> tuple[str, bool]:
+    names = {str(field.get("name", "")) for field in model.get("flds", [])}
+    if previous and previous in names:
+        return previous, False
+
+    for index in range(1, 100):
+        candidate = FIELD_BASE_NAME if index == 1 else f"{FIELD_BASE_NAME} {index}"
+        if candidate not in names:
+            return candidate, True
+        safe_to_reuse = True
+        for note_id in note_ids:
+            note = mw.col.get_note(note_id)
+            try:
+                value = note[candidate]
+            except KeyError:
+                safe_to_reuse = False
+                break
+            if not is_managed_field_value(value):
+                safe_to_reuse = False
+                break
+        if safe_to_reuse:
+            return candidate, False
+    raise RuntimeError("unable to allocate a safe normalized audio field")
+
+
+def _apply_materialization(
+    deck_id: int,
+    deck_name: str,
+    plan: dict[str, Any],
+    generated: dict[str, str],
+    insert_template: bool,
+    profile: dict[str, Any],
+) -> tuple[int, dict[str, str]]:
+    notes = plan["notes"]
+    by_mid: dict[int, list[int]] = {}
+    for note_id, item in notes.items():
+        by_mid.setdefault(int(item["mid"]), []).append(int(note_id))
+
+    previous_materialized = profile.get("materialized") if isinstance(profile.get("materialized"), dict) else {}
+    previous_fields = previous_materialized.get("fields", {}) if isinstance(previous_materialized, dict) else {}
+    fields: dict[str, str] = {}
+
+    for mid, note_ids in by_mid.items():
+        model = mw.col.models.get(mid)
+        if not model:
+            continue
+        previous = previous_fields.get(str(mid)) if isinstance(previous_fields, dict) else None
+        field_name, create_field = _choose_normalized_field(model, note_ids, str(previous) if previous else None)
+        changed = False
+        if create_field:
+            mw.col.models.add_field(model, mw.col.models.new_field(field_name))
+            changed = True
+
+        templates = model.get("tmpls", [])
+        for raw_ord in plan["template_ords"].get(mid, []):
+            if not templates:
+                continue
+            template_index = raw_ord if 0 <= raw_ord < len(templates) else 0
+            template = templates[template_index]
+            current = str(template.get("afmt", ""))
+            updated = upsert_template_block(current, field_name) if insert_template else remove_template_block(current)
+            if updated != current:
+                template["afmt"] = updated
+                changed = True
+        if changed:
+            mw.col.models.update_dict(model)
+        fields[str(mid)] = field_name
+
+    updated_notes = 0
+    for raw_note_id, item in notes.items():
+        note_id = int(raw_note_id)
+        field_name = fields.get(str(int(item["mid"])))
+        if not field_name:
+            continue
+        media_names = [generated[source] for source in item["sources"] if source in generated]
+        value = field_value_for_files(media_names)
+        if not value:
+            continue
+        note = mw.col.get_note(note_id)
+        if field_name not in note:
+            continue
+        current = note[field_name]
+        if current and not is_managed_field_value(current):
+            continue
+        if current != value:
+            note[field_name] = value
+            mw.col.update_note(note)
+        updated_notes += 1
+
+    refreshed = core = _core()
+    current_profile = core._get_deck_profile(deck_id) or dict(profile)
+    current_profile["materialized"] = {
+        "version": 1,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "audio_count": len(generated),
+        "note_count": updated_notes,
+        "files": generated,
+        "fields": fields,
+        "insert_template": bool(insert_template),
+    }
+    core._set_deck_profile(deck_id, current_profile)
+    return updated_notes, fields
+
+
+def _start_materialization(context) -> None:
+    core = _core()
+    current = _current_deck(context)
+    if not current:
+        return
+    deck_id, deck_name = current
+    lang = _lang()
+    if core._analysis_is_running(deck_id) or _state(deck_id, deck_name).get("materializing"):
+        return
+
+    profile = core._get_deck_profile(deck_id)
+    if not isinstance(profile, dict) or not profile.get("files"):
+        state = _state(deck_id, deck_name)
+        state["error"] = t(lang, "materialize_profile_required")
+        _push_state(state)
+        return
+    if not core._profile_matches_config(profile, _conf()):
+        state = _state(deck_id, deck_name)
+        state["error"] = t(lang, "materialize_profile_stale")
+        _push_state(state)
+        return
+
+    ffmpeg, _source = find_ffmpeg(ADDON_ROOT)
+    if not ffmpeg:
+        state = _state(deck_id, deck_name)
+        state["error"] = t(lang, "materialize_requires_ffmpeg")
+        _push_state(state)
+        return
+
+    plan = _collect_materialization_plan(deck_id, profile)
+    sources = list(plan["sources"])
+    if not sources or not plan["notes"]:
+        state = _state(deck_id, deck_name)
+        state["error"] = t(lang, "materialize_no_linked_audio")
+        _push_state(state)
+        return
+
+    target = float(profile.get("target", -24.0))
+    dual_mono = bool(profile.get("dual_mono", False))
+    insert_template = bool(_conf().get("normalized_audio_insert_template", True))
+    media_dir = Path(mw.col.media.dir())
+    total = len(sources)
+    _materializing(deck_id, True)
+    state = _state(deck_id, deck_name)
+    state.update({"materializing": True, "materialize_processed": 0, "materialize_total": total, "message": t(lang, "materialize_progress", processed=0, total=total)})
+    _push_state(state)
+
+    def worker():
+        temp_dir = Path(tempfile.mkdtemp(prefix="bac-normalized-"))
+        generated: list[dict[str, str]] = []
+        failed: list[str] = []
+        try:
+            for index, filename in enumerate(sources, 1):
+                source_path = _safe_media_path(media_dir, filename)
+                if not source_path:
+                    failed.append(filename)
+                    continue
+                try:
+                    measurement = measure_with_ffmpeg(
+                        ffmpeg,
+                        source_path,
+                        target,
+                        dual_mono,
+                        TRUE_PEAK_LIMIT,
+                        LRA_TARGET,
+                    )
+                    if not measurement:
+                        raise RuntimeError("loudness measurement failed")
+                    digest = file_sha256(source_path)
+                    stem = normalized_media_stem(filename, digest, target, dual_mono)
+                    desired = temp_dir / f"{stem}.m4a"
+                    rendered = render_normalized_audio(
+                        ffmpeg,
+                        source_path,
+                        desired,
+                        measurement,
+                        target,
+                        dual_mono,
+                        TRUE_PEAK_LIMIT,
+                        LRA_TARGET,
+                    )
+                    if rendered.stat().st_size > MAX_OUTPUT_BYTES:
+                        raise RuntimeError("normalized audio exceeds size limit")
+                    generated.append({"source": filename, "path": str(rendered)})
+                except Exception as exc:
+                    print(f"[Balanced Audio Controller] normalized copy failed for {filename}:", exc)
+                    failed.append(filename)
+                progress = round(index * 100 / total)
+                try:
+                    mw.taskman.run_on_main(
+                        lambda i=index, p=progress: _push_state({
+                            **_state(deck_id, deck_name),
+                            "materializing": True,
+                            "materialize_processed": i,
+                            "materialize_total": total,
+                            "materialize_progress": p,
+                            "message": t(lang, "materialize_progress", processed=i, total=total),
+                        })
+                    )
+                except Exception:
+                    pass
+            return {"temp_dir": str(temp_dir), "generated": generated, "failed": failed}
+        except Exception:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
+
+    def done(future):
+        _materializing(deck_id, False)
+        temp_dir: str | None = None
+        try:
+            result = future.result()
+            temp_dir = result.get("temp_dir")
+            generated_map: dict[str, str] = {}
+            for item in result.get("generated", []):
+                path = Path(item["path"])
+                if not path.is_file() or not path.name.startswith("bac_norm_"):
+                    continue
+                stored_name = mw.col.media.add_file(str(path))
+                generated_map[str(item["source"])] = stored_name
+            if not generated_map:
+                raise RuntimeError("no normalized audio could be created")
+            note_count, _fields = _apply_materialization(
+                deck_id,
+                deck_name,
+                plan,
+                generated_map,
+                insert_template,
+                profile,
+            )
+            state = _state(deck_id, deck_name)
+            state.update({
+                "materializing": False,
+                "materialized_audio_count": len(generated_map),
+                "materialized_note_count": note_count,
+                "message": t(lang, "materialize_done", count=len(generated_map), notes=note_count),
+            })
+        except Exception as exc:
+            print("[Balanced Audio Controller] materialization failed:", exc)
+            state = _state(deck_id, deck_name)
+            state.update({"materializing": False, "error": t(lang, "materialize_failed")})
+        finally:
+            if temp_dir:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+        _push_state(state)
+
+    mw.taskman.run_in_background(worker, done)
+
 def _install_ffmpeg() -> None:
     global _INSTALLING
     lang = _lang()
@@ -360,6 +695,14 @@ def _on_message(handled, message: str, context):
         _start_analysis(context); return (True, None)
     if message == "ferreis_audio:v010:ffmpeg:install":
         _install_ffmpeg(); return (True, None)
+    if message == "ferreis_audio:v010:materialize":
+        _start_materialization(context); return (True, None)
+    if message.startswith("ferreis_audio:v010:materialize:insert:"):
+        value = message.rsplit(":", 1)[-1] == "1"
+        _core()._save_setting("normalized_audio_insert_template", value)
+        current = _current_deck(context)
+        if current: _push_state(_state(*current))
+        return (True, None)
     if message.startswith("ferreis_audio:v010:backend:"):
         value = message.rsplit(":", 1)[-1]
         if value not in {"auto", "ffmpeg", "webaudio"}: value = "auto"
