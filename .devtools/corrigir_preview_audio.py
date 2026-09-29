@@ -46,4 +46,11 @@ replace_once(
     "assinatura do diálogo com contexto opcional",
 )
 
+replace_once(
+    "tests/test_audio_controller_playwright.py",
+    '''            self.assertIn("fac-minimized", page.locator(".fac-side-panel").get_attribute("class") or "")\n\n            page.evaluate("window.__pycmdMessages=[]")\n            page.locator(".fac-analyze-deck").click()\n''',
+    '''            self.assertIn("fac-minimized", page.locator(".fac-side-panel").get_attribute("class") or "")\n\n            page.locator(".fac-panel-toggle").click()\n            self.assertNotIn("fac-minimized", page.locator(".fac-side-panel").get_attribute("class") or "")\n            page.evaluate("window.__pycmdMessages=[]")\n            page.locator(".fac-analyze-deck").click()\n''',
+    "expandir painel antes de testar ação no verso",
+)
+
 print("Regressões do preview corrigidas.")
