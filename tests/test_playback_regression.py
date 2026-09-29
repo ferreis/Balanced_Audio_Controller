@@ -50,6 +50,7 @@ class PlaybackRegressionTests(unittest.TestCase):
             "_config": lambda: config,
             "_language": lambda conf: "en",
             "_is_mpv_player": lambda value: value is player,
+            "_is_materialized_audio": lambda filename: False,
             "av_player": SimpleNamespace(current_player=player),
             "_current_audio_filename": lambda: "current.mp3",
             "_remove_filter": lambda *args: None,
@@ -110,6 +111,32 @@ class PlaybackRegressionTests(unittest.TestCase):
             "gui_hooks.av_player_did_begin_playing.append(_on_av_player_did_begin_playing)",
             SOURCE,
         )
+
+
+    def test_materialized_audio_bypasses_runtime_normalization(self) -> None:
+        player = FakePlayer()
+        ns = self.base_namespace(player)
+        removed: list[tuple[Any, ...]] = []
+        ns["_remove_filter"] = lambda *args: removed.append(args)
+        ns["_is_materialized_audio"] = lambda filename: bool(filename and filename.startswith("bac_norm_"))
+        ns["_profile_entry_for_current_deck"] = lambda *_: self.fail(
+            "materialized audio must not query/apply deck profile gain"
+        )
+        apply_settings = load_function("_apply_native_settings", ns)
+
+        supported, status = apply_settings(player, "bac_norm_abcd_voice.m4a")
+
+        self.assertTrue(supported)
+        self.assertEqual(status, "status_materialized_audio")
+        self.assertEqual(player.commands, [])
+        self.assertEqual(len(removed), 2)
+
+    def test_deck_analysis_excludes_materialized_audio(self) -> None:
+        self.assertIn(
+            "files = {filename for filename in files if not _is_materialized_audio(filename)}",
+            SOURCE,
+        )
+
 
 
 if __name__ == "__main__":

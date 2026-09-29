@@ -20,6 +20,7 @@ from .analysis_engine import ffmpeg_status, find_ffmpeg, install_managed_ffmpeg,
 from .i18n import t
 from .normalized_audio import (
     FIELD_BASE_NAME,
+    GENERATED_PREFIX,
     MAX_OUTPUT_BYTES,
     extract_sound_filenames,
     field_value_for_files,
@@ -346,7 +347,13 @@ def _collect_materialization_plan(deck_id: int, profile: dict[str, Any]) -> dict
     files = profile.get("files", {})
     if not isinstance(files, dict) or not files:
         return {"notes": {}, "template_ords": {}, "sources": []}
-    profile_files = set(str(name) for name in files)
+    profile_files = {
+        str(name)
+        for name in files
+        if not Path(str(name).replace("\\", "/")).name.casefold().startswith(
+            GENERATED_PREFIX.casefold()
+        )
+    }
     deck_name = core._deck_name(deck_id)
     search_name = deck_name.replace("\\", "\\\\").replace('"', '\\"')
     card_ids = mw.col.find_cards(f'deck:"{search_name}"')

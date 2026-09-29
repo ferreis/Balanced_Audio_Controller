@@ -32,6 +32,7 @@ AUDIO_EXTENSIONS = {
 
 NORMALIZE_FILTER_NAME = "@ferreis_normalize"
 DECK_GAIN_FILTER_NAME = "@ferreis_deck_gain"
+MATERIALIZED_AUDIO_PREFIX = "bac_norm_"
 TRUE_PEAK_LIMIT = -1.5
 LRA_TARGET = 7.0
 PROFILE_FILE_VERSION = 1
@@ -179,6 +180,13 @@ def _remove_filter(player: Any, filter_name: str) -> None:
         pass
 
 
+def _is_materialized_audio(filename: str | None) -> bool:
+    if not filename:
+        return False
+    basename = Path(str(filename).replace("\\", "/")).name
+    return basename.casefold().startswith(MATERIALIZED_AUDIO_PREFIX.casefold())
+
+
 def _normalizer_filter(conf: dict[str, Any]) -> str:
     target = max(-50.0, min(-20.0, float(conf.get("loudness_target", -24.0))))
     dual_mono = "true" if bool(conf.get("dual_mono", False)) else "false"
@@ -255,6 +263,12 @@ def _apply_native_settings(
 
     _remove_filter(player, NORMALIZE_FILTER_NAME)
     _remove_filter(player, DECK_GAIN_FILTER_NAME)
+
+    # Cópias bac_norm_* já foram normalizadas fisicamente em disco. Aplicar
+    # loudnorm ou ganho do perfil novamente distorceria o resultado e poderia
+    # provocar uma segunda normalização desnecessária.
+    if _is_materialized_audio(filename):
+        return True, t(lang, "status_materialized_audio")
 
     profile, entry = _profile_entry_for_current_deck(filename, conf)
     if entry is not None:
@@ -462,6 +476,7 @@ def _collect_deck_audio_files(deck_id: int) -> tuple[str, list[str]]:
         files.update(_audio_filenames(card.question_av_tags()))
         files.update(_audio_filenames(card.answer_av_tags()))
 
+    files = {filename for filename in files if not _is_materialized_audio(filename)}
     return deck_name, sorted(files, key=str.casefold)
 
 
