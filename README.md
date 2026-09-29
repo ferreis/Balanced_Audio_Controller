@@ -338,6 +338,12 @@ A suíte Playwright valida controles de análise, estado do FFmpeg, medição in
 
 MIT License.
 
+## Compact reviewer panel / Painel compacto no revisor
+
+The reviewer panel intentionally keeps only the controls used while studying: speed, volume, real-time normalization, deck-profile status and **Analyze deck**. Advanced options and maintenance actions are available under **Tools → Balanced Audio Controller → Settings**.
+
+O painel do revisor mantém somente os controles usados durante o estudo: velocidade, volume, normalização em tempo real, status do perfil e **Analisar deck**. As opções avançadas e ações de manutenção ficam em **Ferramentas → Balanced Audio Controller → Configurações**.
+
 ## Materialized normalized audio / Áudio normalizado materializado
 
 After a deck has been analyzed, **Create normalized copies / Criar cópias normalizadas** can render a second, already-normalized audio file for each analyzed source. This operation requires FFmpeg because it writes real audio files; the built-in WebAudio analyzer remains available for analysis only.

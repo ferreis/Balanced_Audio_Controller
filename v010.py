@@ -837,6 +837,200 @@ def _install_ffmpeg() -> None:
     mw.taskman.run_in_background(worker, done)
 
 
+
+def _active_reviewer():
+    reviewer = getattr(mw, "reviewer", None)
+    return reviewer if reviewer is not None and getattr(reviewer, "card", None) else None
+
+
+def _clear_current_deck_profile(context) -> None:
+    current = _current_deck(context)
+    if not current:
+        return
+    deck_id, deck_name = current
+    core = _core()
+    core._clear_deck_profile(deck_id)
+    _push_state(_state(deck_id, deck_name))
+    _supported, status = core._apply_native_settings(
+        filename=core._current_audio_filename()
+    )
+    if status:
+        core._push_status(status)
+
+
+def _open_settings_dialog() -> None:
+    from aqt.qt import (
+        QCheckBox,
+        QComboBox,
+        QDialog,
+        QDialogButtonBox,
+        QDoubleSpinBox,
+        QFormLayout,
+        QGroupBox,
+        QHBoxLayout,
+        QLabel,
+        QPushButton,
+        QVBoxLayout,
+        QWidget,
+        qconnect,
+    )
+
+    lang = _lang()
+    conf = _conf()
+    dialog = QDialog(mw)
+    dialog.setWindowTitle(t(lang, "settings_title"))
+    dialog.setMinimumWidth(470)
+    layout = QVBoxLayout(dialog)
+
+    form = QFormLayout()
+
+    language = QComboBox(dialog)
+    language.addItem("Automático / Automatic", "auto")
+    language.addItem("English", "en")
+    language.addItem("Português (Brasil)", "pt-BR")
+    language_index = language.findData(str(conf.get("language", "auto")))
+    language.setCurrentIndex(language_index if language_index >= 0 else 0)
+    form.addRow(t(lang, "settings_language"), language)
+
+    target = QDoubleSpinBox(dialog)
+    target.setRange(-50.0, -20.0)
+    target.setDecimals(0)
+    target.setSingleStep(1.0)
+    target.setSuffix(" LUFS")
+    target.setValue(max(-50.0, min(-20.0, float(conf.get("loudness_target", -24.0)))))
+    form.addRow(t(lang, "target_loudness"), target)
+
+    dual_mono = QCheckBox(t(lang, "dual_mono"), dialog)
+    dual_mono.setChecked(bool(conf.get("dual_mono", False)))
+    form.addRow("", dual_mono)
+
+    use_profile = QCheckBox(t(lang, "use_analyzed_profile"), dialog)
+    use_profile.setChecked(bool(conf.get("deck_profile_enabled", False)))
+    form.addRow("", use_profile)
+
+    backend = QComboBox(dialog)
+    backend.addItem(t(lang, "analysis_auto"), "auto")
+    backend.addItem(t(lang, "analysis_ffmpeg"), "ffmpeg")
+    backend.addItem(t(lang, "analysis_webaudio"), "webaudio")
+    backend_index = backend.findData(str(conf.get("analysis_backend", "auto")))
+    backend.setCurrentIndex(backend_index if backend_index >= 0 else 0)
+    form.addRow(t(lang, "analysis_method"), backend)
+
+    insert_template = QCheckBox(t(lang, "insert_normalized_template"), dialog)
+    insert_template.setChecked(bool(conf.get("normalized_audio_insert_template", True)))
+    form.addRow("", insert_template)
+    layout.addLayout(form)
+
+    ffmpeg_group = QGroupBox(t(lang, "settings_ffmpeg"), dialog)
+    ffmpeg_layout = QHBoxLayout(ffmpeg_group)
+    ffmpeg_state = _ffmpeg_state()
+    ffmpeg_label = QLabel(
+        t(lang, "ffmpeg_ready") if ffmpeg_state.get("available") else t(lang, "ffmpeg_missing"),
+        ffmpeg_group,
+    )
+    install_button = QPushButton(t(lang, "install_ffmpeg"), ffmpeg_group)
+    install_button.setEnabled(
+        not bool(ffmpeg_state.get("available"))
+        and bool(ffmpeg_state.get("installer_available"))
+        and not bool(ffmpeg_state.get("installing"))
+    )
+    ffmpeg_layout.addWidget(ffmpeg_label, 1)
+    ffmpeg_layout.addWidget(install_button)
+    layout.addWidget(ffmpeg_group)
+
+    def apply_settings() -> None:
+        updated = _conf()
+        updated["language"] = str(language.currentData() or "auto")
+        updated["loudness_target"] = float(target.value())
+        updated["dual_mono"] = bool(dual_mono.isChecked())
+        updated["deck_profile_enabled"] = bool(use_profile.isChecked())
+        selected_backend = str(backend.currentData() or "auto")
+        updated["analysis_backend"] = (
+            selected_backend if selected_backend in {"auto", "ffmpeg", "webaudio"} else "auto"
+        )
+        updated["normalized_audio_insert_template"] = bool(insert_template.isChecked())
+        mw.addonManager.writeConfig(__package__, updated)
+
+        core = _core()
+        _supported, status = core._apply_native_settings(
+            filename=core._current_audio_filename(),
+            update_filters=True,
+        )
+        if status:
+            core._push_status(status)
+        current = _current_deck()
+        if current:
+            _push_state(_state(*current))
+
+    def install_ffmpeg_from_dialog() -> None:
+        _install_ffmpeg()
+        ffmpeg_label.setText(t(lang, "ffmpeg_installing_ui"))
+        install_button.setEnabled(False)
+
+    qconnect(install_button.clicked, install_ffmpeg_from_dialog)
+
+    actions_group = QGroupBox(t(lang, "settings_current_deck"), dialog)
+    actions_layout = QVBoxLayout(actions_group)
+    reviewer = _active_reviewer()
+    current = _current_deck(reviewer) if reviewer else None
+    if current:
+        deck_label = QLabel(current[1], actions_group)
+        deck_label.setWordWrap(True)
+        actions_layout.addWidget(deck_label)
+    else:
+        hint = QLabel(t(lang, "settings_no_active_deck"), actions_group)
+        hint.setWordWrap(True)
+        actions_layout.addWidget(hint)
+
+    analyze_button = QPushButton(t(lang, "analyze_deck"), actions_group)
+    prepare_button = QPushButton(t(lang, "prepare_normalized_field"), actions_group)
+    materialize_button = QPushButton(t(lang, "materialize_audio"), actions_group)
+    clear_button = QPushButton(t(lang, "settings_clear_profile"), actions_group)
+    for button in (analyze_button, prepare_button, materialize_button, clear_button):
+        button.setEnabled(reviewer is not None)
+        actions_layout.addWidget(button)
+    layout.addWidget(actions_group)
+
+    def run_action(action) -> None:
+        if reviewer is None:
+            return
+        apply_settings()
+        action(reviewer)
+
+    qconnect(analyze_button.clicked, lambda: run_action(_start_analysis))
+    qconnect(prepare_button.clicked, lambda: run_action(_prepare_normalized_field_setup))
+    qconnect(materialize_button.clicked, lambda: run_action(_start_materialization))
+    qconnect(clear_button.clicked, lambda: run_action(_clear_current_deck_profile))
+
+    buttons = QDialogButtonBox(
+        QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel,
+        parent=dialog,
+    )
+
+    def save_and_close() -> None:
+        apply_settings()
+        dialog.accept()
+
+    qconnect(buttons.accepted, save_and_close)
+    qconnect(buttons.rejected, dialog.reject)
+    layout.addWidget(buttons)
+    dialog.exec()
+
+
+def _register_tools_menu() -> None:
+    from aqt.qt import QAction, QMenu, qconnect
+
+    if getattr(mw, "_balanced_audio_tools_menu", None) is not None:
+        return
+    menu = QMenu("Balanced Audio Controller", mw)
+    settings_action = QAction(t(_lang(), "settings_menu_action"), mw)
+    qconnect(settings_action.triggered, _open_settings_dialog)
+    menu.addAction(settings_action)
+    mw.form.menuTools.addMenu(menu)
+    mw._balanced_audio_tools_menu = menu
+    mw._balanced_audio_settings_action = settings_action
+
+
 def _on_web_content(web_content: WebContent, context: object | None) -> None:
     if not isinstance(context, aqt.reviewer.Reviewer):
         return
@@ -878,6 +1072,8 @@ def _on_message(handled, message: str, context):
         _handle_done(message); return (True, None)
     return handled
 
+
+_register_tools_menu()
 
 gui_hooks.webview_will_set_content.append(_on_web_content)
 gui_hooks.webview_did_receive_js_message.append(_on_message)
