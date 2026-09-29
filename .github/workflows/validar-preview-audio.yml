@@ -34,6 +34,7 @@ jobs:
           python3 .devtools/preparar_preview_audio.py
           python3 .devtools/adicionar_preview_audio.py
           python3 .devtools/complementar_preview_audio.py
+          python3 .devtools/corrigir_preview_audio.py
 
       - name: Preparar Playwright
         shell: bash
@@ -92,6 +93,8 @@ jobs:
               problemas.append('v010 ainda depende diretamente de context.web')
           if 'mountedRoot' not in painel_v010 or 'attach(root)' not in painel_v010:
               problemas.append('ciclo de vida Frente/Verso não foi corrigido')
+          if 'minimizedState' not in painel_v010:
+              problemas.append('estado do painel não é preservado entre Frente/Verso')
           if 'fac-preview-side-badge' not in painel:
               problemas.append('indicador Frente/Verso ausente')
           if '_safe_media_path' not in extensao or 'relative_to(root)' not in extensao:
@@ -110,7 +113,7 @@ jobs:
           set -euo pipefail
           git config user.name "Rafael Fernando dos reis Mecabô"
           git config user.email "rafa_ferreis@hotmail.com"
-          git add __init__.py i18n.py v010.py web/audio_controller.js web/audio_controller_v010.js web/audio_controller.css tests/test_audio_controller_playwright.py tests/test_preview_context.py
+          git add __init__.py i18n.py v010.py web/audio_controller.js web/audio_controller_v010.js web/audio_controller.css tests/test_audio_controller_playwright.py tests/test_extension_loading.py tests/test_preview_context.py
           git diff --cached --check
           if git diff --cached --quiet; then
             echo "Nenhuma alteração de produto pendente."
