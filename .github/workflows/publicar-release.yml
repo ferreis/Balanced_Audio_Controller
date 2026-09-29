@@ -1,0 +1,261 @@
+# Workflow de produção.
+# Descrição: valida o add-on em toda atualização da dev/main e cria uma release
+# automaticamente quando uma alteração chega à main. A versão base vem de
+# manifest.json; se ela já tiver sido publicada, cria uma build prerelease única.
+name: Publicar release do add-on
+run-name: Validar e publicar release do Balanced Audio Controller
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validar:
+    name: Testar e auditar o add-on
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Obter código do repositório
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+
+      - name: Preparar ambiente de testes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --disable-pip-version-check --no-cache-dir 'playwright==1.63.0'
+          .venv/bin/python -m playwright install --with-deps chromium
+
+      - name: Executar testes automatizados e Playwright
+        shell: bash
+        run: |
+          set -euo pipefail
+          .venv/bin/python -m compileall -q __init__.py analysis_engine.py normalized_audio.py i18n.py v010.py tests
+          .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Validar segurança e versão
+        shell: bash
+        run: |
+          set -euo pipefail
+          .venv/bin/python - <<'PY'
+          import ast
+          import json
+          import re
+          from pathlib import Path
+
+          problemas = []
+          arquivos_python = [
+              Path('__init__.py'),
+              Path('analysis_engine.py'),
+              Path('normalized_audio.py'),
+              Path('v010.py'),
+          ]
+
+          for arquivo in arquivos_python:
+              arvore = ast.parse(arquivo.read_text(encoding='utf-8'), filename=str(arquivo))
+              for no in ast.walk(arvore):
+                  if not isinstance(no, ast.Call):
+                      continue
+                  for kw in no.keywords:
+                      if (
+                          kw.arg == 'shell'
+                          and isinstance(kw.value, ast.Constant)
+                          and kw.value.value is True
+                      ):
+                          problemas.append(f'{arquivo}:{getattr(no, "lineno", "?")}: shell=True')
+
+          manifest = json.loads(Path('manifest.json').read_text(encoding='utf-8'))
+          versao = str(manifest.get('human_version', '')).strip()
+          if not re.fullmatch(r'\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?', versao):
+              problemas.append(f'versão inválida em manifest.json: {versao!r}')
+
+          workflow = Path('.github/workflows/publicar-release.yml').read_text(encoding='utf-8')
+          for linha in workflow.splitlines():
+              trecho = linha.strip()
+              if trecho.startswith('uses:'):
+                  referencia = trecho.split('@', 1)[-1]
+                  if not re.fullmatch(r'[0-9a-f]{40}', referencia):
+                      problemas.append(f'action sem SHA fixo: {trecho}')
+
+          if problemas:
+              raise SystemExit('\n'.join(problemas))
+          print('Auditoria de segurança concluída sem violações detectadas.')
+          PY
+
+      - name: Gerar e validar pacote do add-on
+        shell: bash
+        run: |
+          set -euo pipefail
+          .venv/bin/python build.py
+          .venv/bin/python - <<'PY'
+          import json
+          import zipfile
+          from pathlib import Path
+
+          manifest = json.loads(Path('manifest.json').read_text(encoding='utf-8'))
+          versao = str(manifest['human_version'])
+          pacote = Path('dist') / f'Balanced_Audio_Controller-v{versao}.ankiaddon'
+          if not pacote.is_file():
+              raise SystemExit(f'pacote não encontrado: {pacote}')
+          with zipfile.ZipFile(pacote, 'r') as arquivo:
+              corrompido = arquivo.testzip()
+              if corrompido:
+                  raise SystemExit(f'pacote corrompido: {corrompido}')
+          print(pacote)
+          PY
+
+  publicar:
+    name: Criar release no GitHub
+    needs: validar
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Obter código da main
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Determinar versão e tipo da release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="$(python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          value = str(json.loads(Path('manifest.json').read_text(encoding='utf-8'))['human_version']).strip()
+          if not re.fullmatch(r'\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?', value):
+              raise SystemExit('human_version inválida')
+          print(value)
+          PY
+          )"
+
+          BASE_TAG="v${VERSION}"
+          ASSET="dist/Balanced_Audio_Controller-v${VERSION}.ankiaddon"
+          RELEASE_DATA="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq ".[] | select(.tag_name == \"${BASE_TAG}\") | [.id, .draft] | @tsv" | head -n 1 || true)"
+
+          TAG="${BASE_TAG}"
+          TITLE="Balanced Audio Controller v${VERSION}"
+          PRERELEASE="false"
+          REUSE_DRAFT="false"
+
+          if [[ -n "${RELEASE_DATA}" ]]; then
+            RELEASE_ID="$(printf '%s' "${RELEASE_DATA}" | cut -f1)"
+            IS_DRAFT="$(printf '%s' "${RELEASE_DATA}" | cut -f2)"
+            if [[ "${IS_DRAFT}" == "true" ]]; then
+              REUSE_DRAFT="true"
+            else
+              TAG="${BASE_TAG}-build.${GITHUB_RUN_NUMBER}"
+              TITLE="Balanced Audio Controller v${VERSION} (build ${GITHUB_RUN_NUMBER})"
+              PRERELEASE="true"
+            fi
+          elif git rev-parse -q --verify "refs/tags/${BASE_TAG}" >/dev/null; then
+            TAG="${BASE_TAG}-build.${GITHUB_RUN_NUMBER}"
+            TITLE="Balanced Audio Controller v${VERSION} (build ${GITHUB_RUN_NUMBER})"
+            PRERELEASE="true"
+          fi
+
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null && [[ "${REUSE_DRAFT}" != "true" ]]; then
+            echo "::error::A tag ${TAG} já existe."
+            exit 1
+          fi
+
+          {
+            echo "version=${VERSION}"
+            echo "tag=${TAG}"
+            echo "title=${TITLE}"
+            echo "asset=${ASSET}"
+            echo "prerelease=${PRERELEASE}"
+            echo "reuse_draft=${REUSE_DRAFT}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Gerar pacote para publicação
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 build.py
+          test -f '${{ steps.release.outputs.asset }}'
+
+      - name: Gerar notas da release
+        shell: bash
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          PREVIOUS_TAG="$(git tag --sort=-version:refname --merged HEAD | grep -Fvx "${TAG}" | head -n 1 || true)"
+          {
+            echo "## Alterações"
+            echo
+            if [[ -n "${PREVIOUS_TAG}" ]]; then
+              git log --pretty='- %s (`%h`)' "${PREVIOUS_TAG}..${GITHUB_SHA}"
+            else
+              git log --pretty='- %s (`%h`)' "${GITHUB_SHA}"
+            fi
+            echo
+            echo "## Validação automática"
+            echo
+            echo "- Testes Python e Playwright aprovados."
+            echo "- Auditoria de segurança aprovada."
+            echo "- Pacote .ankiaddon validado antes da publicação."
+          } > release-notes.md
+
+      - name: Publicar release nova
+        if: steps.release.outputs.reuse_draft != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          TITLE: ${{ steps.release.outputs.title }}
+          ASSET: ${{ steps.release.outputs.asset }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          EXTRA=()
+          if [[ "${PRERELEASE}" == "true" ]]; then
+            EXTRA+=(--prerelease)
+          fi
+          gh release create "${TAG}" "${ASSET}" \
+            --target "${GITHUB_SHA}" \
+            --title "${TITLE}" \
+            --notes-file release-notes.md \
+            "${EXTRA[@]}"
+
+      - name: Atualizar e publicar draft existente
+        if: steps.release.outputs.reuse_draft == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          TITLE: ${{ steps.release.outputs.title }}
+          ASSET: ${{ steps.release.outputs.asset }}
+        run: |
+          set -euo pipefail
+          ASSET_NAME="$(basename "${ASSET}")"
+          gh release delete-asset "${TAG}" "${ASSET_NAME}" --yes >/dev/null 2>&1 || true
+          gh release upload "${TAG}" "${ASSET}"
+          gh release edit "${TAG}" \
+            --draft=false \
+            --target "${GITHUB_SHA}" \
+            --title "${TITLE}" \
+            --notes-file release-notes.md
