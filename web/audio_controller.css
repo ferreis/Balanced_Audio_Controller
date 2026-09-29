@@ -313,7 +313,7 @@
 
 #ferreis-audio-controller .fac-deck-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 58px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
 }
 
@@ -376,6 +376,29 @@
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+#ferreis-audio-controller .fac-preview-tools {
+  gap: 8px;
+}
+
+#ferreis-audio-controller .fac-preview-side-badge {
+  padding: 2px 7px;
+  border: 1px solid rgba(106, 169, 255, 0.42);
+  border-radius: 999px;
+  color: var(--fac-accent);
+  font-size: 9px;
+  line-height: 1.2;
+}
+
+#ferreis-audio-controller .fac-preview-audio-count {
+  color: var(--fac-muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+#ferreis-audio-controller .fac-open-settings {
+  width: 100%;
 }
 
 @media (max-width: 760px) {

@@ -99,8 +99,11 @@ def _state(deck_id: int, deck_name: str | None = None) -> dict[str, Any]:
 
 
 def _push_state(state: dict[str, Any]) -> None:
-    reviewer = getattr(mw, "reviewer", None)
-    web = getattr(reviewer, "web", None)
+    core = _core()
+    web = core._context_web(core._active_card_context())
+    if not web:
+        reviewer = getattr(mw, "reviewer", None)
+        web = getattr(reviewer, "web", None)
     if not web:
         return
     payload = json.dumps(state, ensure_ascii=False)
@@ -113,7 +116,7 @@ def _push_state(state: dict[str, Any]) -> None:
 
 def _current_deck(context=None) -> tuple[int, str] | None:
     core = _core()
-    card = getattr(context, "card", None) if context is not None else None
+    card = core._card_from_context(context) if context is not None else None
     card = card or core._current_reviewer_card()
     if not card:
         return None
@@ -243,6 +246,9 @@ def _start_webaudio_analysis(context) -> None:
     if not current:
         return
     deck_id, deck_name = current
+    web = core._context_web(context)
+    if not web:
+        return
     lang = _lang()
     if core._analysis_is_running(deck_id):
         return
@@ -264,7 +270,7 @@ def _start_webaudio_analysis(context) -> None:
     state.update({"analyzing": True, "processed": 0, "total": len(filenames), "progress": 0, "message": t(lang, "analysis_progress_webaudio", processed=0, total=len(filenames))})
     _push_state(state)
     payload = json.dumps({"session": session_id, "files": filenames, "dual_mono": dual_mono}, ensure_ascii=False)
-    context.web.eval(f"window.BACV010 && window.BACV010.startWebAudioAnalysis({payload});")
+    web.eval(f"window.BACV010 && window.BACV010.startWebAudioAnalysis({payload});")
 
 
 def _start_analysis(context) -> None:
@@ -814,7 +820,7 @@ def _install_ffmpeg() -> None:
         if _INSTALLING:
             return
         _INSTALLING = True
-    current = _current_deck()
+    current = _current_deck(_core()._active_card_context())
     if current:
         state = _state(*current); state["message"] = t(lang, "ffmpeg_installing", installer=status.get("installer_name") or "imageio-ffmpeg"); _push_state(state)
 
@@ -830,7 +836,7 @@ def _install_ffmpeg() -> None:
         except Exception as exc:
             print("[Balanced Audio Controller] FFmpeg installation failed:", exc); message = t(lang, "ffmpeg_install_failed")
         _core()._push_status(message)
-        current_deck = _current_deck()
+        current_deck = _current_deck(_core()._active_card_context())
         if current_deck:
             state = _state(*current_deck); state["message"] = message; _push_state(state)
 
@@ -858,7 +864,7 @@ def _clear_current_deck_profile(context) -> None:
         core._push_status(status)
 
 
-def _open_settings_dialog() -> None:
+def _open_settings_dialog(context: object | None = None) -> None:
     from aqt.qt import (
         QCheckBox,
         QComboBox,
@@ -877,6 +883,10 @@ def _open_settings_dialog() -> None:
 
     lang = _lang()
     conf = _conf()
+    core = _core()
+    action_context = (
+        context if core._is_supported_card_context(context) else _active_reviewer()
+    )
     dialog = QDialog(mw)
     dialog.setWindowTitle(t(lang, "settings_title"))
     dialog.setMinimumWidth(470)
@@ -951,14 +961,14 @@ def _open_settings_dialog() -> None:
         updated["normalized_audio_insert_template"] = bool(insert_template.isChecked())
         mw.addonManager.writeConfig(__package__, updated)
 
-        core = _core()
+        current = _current_deck(action_context)
         _supported, status = core._apply_native_settings(
             filename=core._current_audio_filename(),
+            deck_id=current[0] if current else core._current_audio_deck_id(),
             update_filters=True,
         )
         if status:
-            core._push_status(status)
-        current = _current_deck()
+            core._push_status(status, action_context)
         if current:
             _push_state(_state(*current))
 
@@ -971,8 +981,7 @@ def _open_settings_dialog() -> None:
 
     actions_group = QGroupBox(t(lang, "settings_current_deck"), dialog)
     actions_layout = QVBoxLayout(actions_group)
-    reviewer = _active_reviewer()
-    current = _current_deck(reviewer) if reviewer else None
+    current = _current_deck(action_context) if action_context else None
     if current:
         deck_label = QLabel(current[1], actions_group)
         deck_label.setWordWrap(True)
@@ -987,15 +996,15 @@ def _open_settings_dialog() -> None:
     materialize_button = QPushButton(t(lang, "materialize_audio"), actions_group)
     clear_button = QPushButton(t(lang, "settings_clear_profile"), actions_group)
     for button in (analyze_button, prepare_button, materialize_button, clear_button):
-        button.setEnabled(reviewer is not None)
+        button.setEnabled(action_context is not None and current is not None)
         actions_layout.addWidget(button)
     layout.addWidget(actions_group)
 
     def run_action(action) -> None:
-        if reviewer is None:
+        if action_context is None or current is None:
             return
         apply_settings()
-        action(reviewer)
+        action(action_context)
 
     qconnect(analyze_button.clicked, lambda: run_action(_start_analysis))
     qconnect(prepare_button.clicked, lambda: run_action(_prepare_normalized_field_setup))
@@ -1024,7 +1033,7 @@ def _register_tools_menu() -> None:
         return
     menu = QMenu("Balanced Audio Controller", mw)
     settings_action = QAction(t(_lang(), "settings_menu_action"), mw)
-    qconnect(settings_action.triggered, _open_settings_dialog)
+    qconnect(settings_action.triggered, lambda: _open_settings_dialog())
     menu.addAction(settings_action)
     mw.form.menuTools.addMenu(menu)
     mw._balanced_audio_tools_menu = menu
@@ -1032,15 +1041,19 @@ def _register_tools_menu() -> None:
 
 
 def _on_web_content(web_content: WebContent, context: object | None) -> None:
-    if not isinstance(context, aqt.reviewer.Reviewer):
+    if not _core()._is_supported_card_context(context):
         return
     package = mw.addonManager.addonFromModule(__package__)
     web_content.js.append(f"/_addons/{package}/web/audio_controller_v010.js")
 
 
 def _on_message(handled, message: str, context):
-    if not isinstance(context, aqt.reviewer.Reviewer):
+    core = _core()
+    if not core._is_supported_card_context(context):
         return handled
+    core._set_active_card_context(context)
+    if message == "ferreis_audio:v010:settings":
+        _open_settings_dialog(context); return (True, None)
     if message == "ferreis_audio:v010:state":
         current = _current_deck(context)
         if current: _push_state(_state(*current))

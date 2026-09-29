@@ -17,7 +17,7 @@ class ExtensionLoadingTests(unittest.TestCase):
 
     def test_settings_menu_registration_occurs_inside_v010(self) -> None:
         source = (ROOT / "v010.py").read_text(encoding="utf-8")
-        self.assertIn("def _open_settings_dialog()", source)
+        self.assertIn("def _open_settings_dialog(", source)
         self.assertIn("def _register_tools_menu()", source)
         self.assertIn("mw.form.menuTools.addMenu(menu)", source)
 

@@ -38,6 +38,11 @@ I18N = {
     "use_analyzed_profile_hint": "Use profile",
     "analyze_deck": "Analyze deck",
     "clear": "Clear",
+    "preview_mode": "Preview",
+    "preview_front": "Front",
+    "preview_back": "Back",
+    "preview_audio_count": "{count} audio file(s) on this side",
+    "preview_open_settings": "Audio settings...",
     "analysis_method": "Analysis method",
     "analysis_auto": "Automatic",
     "analysis_ffmpeg": "FFmpeg",
@@ -79,6 +84,9 @@ def base_config() -> dict:
     return {
         "language": "en",
         "i18n": I18N,
+        "surface": "reviewer",
+        "side": "question",
+        "side_audio_count": 1,
         "speed": 1.0,
         "volume": 1.0,
         "normalize": True,
@@ -249,7 +257,56 @@ class AudioControllerPlaywrightTests(unittest.TestCase):
             page.close()
 
 
+    def test_preview_panel_exposes_side_and_settings(self) -> None:
+        config = base_config()
+        config.update({"surface": "previewer", "side": "question", "side_audio_count": 2})
+        page = self.page_with_config(config)
+        try:
+            self.assertEqual(page.locator(".fac-preview-side-badge").inner_text(), "Front")
+            self.assertEqual(page.locator(".fac-preview-audio-count").inner_text(), "2 audio file(s) on this side")
+            page.evaluate("window.__pycmdMessages=[]")
+            page.locator(".fac-open-settings").click()
+            self.assertIn("ferreis_audio:v010:settings", page.evaluate("window.__pycmdMessages"))
+        finally:
+            page.close()
 
+    def test_front_and_back_rebind_the_same_component(self) -> None:
+        config = base_config()
+        config.update({"surface": "previewer", "side": "question", "side_audio_count": 1})
+        page = self.page_with_config(config)
+        try:
+            page.locator(".fac-panel-toggle").click()
+            self.assertIn("fac-minimized", page.locator(".fac-side-panel").get_attribute("class") or "")
+
+            back = base_config()
+            back.update({"surface": "previewer", "side": "answer", "side_audio_count": 3})
+            page.evaluate(
+                """config => {
+                    const oldRoot = document.getElementById('ferreis-audio-controller');
+                    const newRoot = document.createElement('div');
+                    newRoot.id = 'ferreis-audio-controller';
+                    newRoot.dataset.config = JSON.stringify(config);
+                    oldRoot.replaceWith(newRoot);
+                    window.FerreisAnkiAudio.mount();
+                }""",
+                back,
+            )
+            page.wait_for_selector(".fac-panel-toggle")
+
+            self.assertEqual(page.locator(".fac-side-panel").count(), 1)
+            self.assertEqual(page.locator(".fac-panel-toggle").count(), 1)
+            self.assertEqual(page.locator(".fac-preview-side-badge").inner_text(), "Back")
+            self.assertEqual(page.locator(".fac-preview-audio-count").inner_text(), "3 audio file(s) on this side")
+            self.assertTrue(page.evaluate("window.BACV010.root === document.getElementById('ferreis-audio-controller')"))
+            self.assertIn("fac-minimized", page.locator(".fac-side-panel").get_attribute("class") or "")
+
+            page.locator(".fac-panel-toggle").click()
+            self.assertNotIn("fac-minimized", page.locator(".fac-side-panel").get_attribute("class") or "")
+            page.evaluate("window.__pycmdMessages=[]")
+            page.locator(".fac-analyze-deck").click()
+            self.assertIn("ferreis_audio:v010:analyze", page.evaluate("window.__pycmdMessages"))
+        finally:
+            page.close()
 
 
 if __name__ == "__main__":
