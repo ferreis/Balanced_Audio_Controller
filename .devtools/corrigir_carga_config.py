@@ -11,7 +11,7 @@ block = '''\n# v0.10 is loaded from i18n because this module is imported during 
 i18n = i18n_path.read_text(encoding='utf-8')
 if block in i18n:
     i18n = i18n.replace(block, '\n', 1)
-    i18n_path.write_text(i18n, encoding='utf-8')
+i18n_path.write_text(i18n.rstrip() + '\n', encoding='utf-8')
 
 init = init_path.read_text(encoding='utf-8')
 loader = '''\n\n# Carrega a extensão somente após o núcleo concluir a própria inicialização.\n# Isso evita importação circular entre __init__, i18n e v010.\ntry:\n    from . import v010 as _v010  # noqa: F401,E402\nexcept Exception as _v010_error:\n    print("[Balanced Audio Controller] v0.10 extension load failed:", _v010_error)\n'''
