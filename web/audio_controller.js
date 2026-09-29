@@ -22,6 +22,7 @@
       }
 
       this.render();
+      window.BACV010?.attach?.(root);
       requestAnimationFrame(() => this.restoreSidePanelPosition());
     },
 
@@ -31,6 +32,14 @@
       return String(template).replace(/\{(\w+)\}/g, (_match, name) =>
         Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : `{${name}}`
       );
+    },
+
+    isPreviewSurface() {
+      return ["previewer", "card_layout"].includes(String(this.config?.surface || ""));
+    },
+
+    previewSideLabel() {
+      return this.t(this.config?.side === "answer" ? "preview_back" : "preview_front");
     },
 
     render() {
@@ -45,6 +54,17 @@
           </div>
 
           <div class="fac-side-body">
+            ${this.isPreviewSurface() ? `
+            <section class="fac-block fac-preview-tools">
+              <div class="fac-row fac-row-label">
+                <span>${t("preview_mode")}</span>
+                <span class="fac-preview-side-badge">${this.previewSideLabel()}</span>
+              </div>
+              <div class="fac-preview-audio-count">${t("preview_audio_count", { count: Number(this.config.side_audio_count || 0) })}</div>
+              <button class="fac-action fac-open-settings" type="button">${t("preview_open_settings")}</button>
+            </section>
+            ` : ""}
+
             <section class="fac-block">
               <div class="fac-row fac-row-label">
                 <span>${t("speed")}</span>
@@ -150,6 +170,13 @@
         pycmd(`ferreis_audio:set:normalize:${this.config.normalize ? 1 : 0}`);
       });
 
+
+      const settingsButton = this.root.querySelector(".fac-open-settings");
+      if (settingsButton) {
+        settingsButton.addEventListener("click", () => {
+          pycmd("ferreis_audio:v010:settings");
+        });
+      }
 
       this.root.querySelector(".fac-analyze-deck").addEventListener("click", () => {
         this.updateDeckProfile({

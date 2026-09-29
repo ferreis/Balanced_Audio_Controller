@@ -10,27 +10,33 @@
   const ext = window.BACV010 || {
     root: null,
     state: {},
-    mounted: false,
+    mountedRoot: null,
+    minimizedState: null,
 
     async boot() {
       for (let i = 0; i < 100; i++) {
         const root = document.getElementById("ferreis-audio-controller");
         const base = window.FerreisAnkiAudio;
         if (root && base && root.dataset.mounted === "1") {
-          this.root = root;
-          this.augment();
+          this.attach(root);
           return;
         }
         await sleep(50);
       }
     },
 
+    attach(root) {
+      if (!root || this.mountedRoot === root) return;
+      this.root = root;
+      this.mountedRoot = root;
+      this.augment();
+    },
+
     augment() {
-      if (this.mounted || !this.root) return;
+      if (!this.root) return;
       const handle = this.root.querySelector(".fac-side-handle");
       const oldAnalyze = this.root.querySelector(".fac-analyze-deck");
       if (!handle || !oldAnalyze) return;
-      this.mounted = true;
 
       this.installMinimizeStyles();
       this.installMinimizeControl(handle);
@@ -67,6 +73,7 @@
     },
 
     readMinimizedState() {
+      if (typeof this.minimizedState === "boolean") return this.minimizedState;
       try {
         return localStorage.getItem(PANEL_MINIMIZED_KEY) === "1";
       } catch (_) {
@@ -131,6 +138,7 @@
       if (!panel || !button) return;
 
       const collapsed = Boolean(minimized);
+      this.minimizedState = collapsed;
       panel.classList.toggle("fac-minimized", collapsed);
       button.textContent = collapsed ? "+" : "−";
       button.title = this.panelLabel(collapsed);

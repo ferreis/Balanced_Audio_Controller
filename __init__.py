@@ -42,6 +42,8 @@ _ANALYSIS_LOCK = threading.Lock()
 _PLAYBACK_LOCK = threading.RLock()
 _ANALYSIS_RUNNING: set[str] = set()
 _CURRENT_AUDIO_FILENAME: str | None = None
+_CURRENT_AUDIO_DECK_ID: int | None = None
+_ACTIVE_CARD_CONTEXT: Any | None = None
 
 
 def _config() -> dict[str, Any]:
@@ -99,6 +101,64 @@ def _current_reviewer_deck_id() -> int | None:
     card = _current_reviewer_card()
     return _card_deck_id(card) if card else None
 
+
+def _context_surface(context: object | None) -> str:
+    if isinstance(context, aqt.reviewer.Reviewer):
+        return "reviewer"
+    if context is None:
+        return ""
+    cls = type(context)
+    module = str(getattr(cls, "__module__", ""))
+    name = str(getattr(cls, "__name__", ""))
+    if module == "aqt.browser.previewer" and name.endswith("Previewer"):
+        return "previewer"
+    if module == "aqt.clayout" and name == "CardLayout":
+        return "card_layout"
+    return ""
+
+
+def _is_supported_card_context(context: object | None) -> bool:
+    return bool(_context_surface(context))
+
+
+def _card_from_context(context: object | None):
+    if not _is_supported_card_context(context):
+        return None
+    candidate = getattr(context, "card", None)
+    if callable(candidate):
+        try:
+            candidate = candidate()
+        except Exception:
+            candidate = None
+    if candidate is not None:
+        return candidate
+    return getattr(context, "rendered_card", None)
+
+
+def _context_web(context: object | None):
+    if not _is_supported_card_context(context):
+        return None
+    if isinstance(context, aqt.reviewer.Reviewer):
+        return getattr(context, "web", None)
+    surface = _context_surface(context)
+    if surface == "previewer":
+        return getattr(context, "_web", None)
+    if surface == "card_layout":
+        return getattr(context, "preview_web", None)
+    return None
+
+
+def _set_active_card_context(context: object | None) -> None:
+    global _ACTIVE_CARD_CONTEXT
+    with _PLAYBACK_LOCK:
+        _ACTIVE_CARD_CONTEXT = context if _is_supported_card_context(context) else None
+
+
+def _active_card_context() -> object | None:
+    with _PLAYBACK_LOCK:
+        return _ACTIVE_CARD_CONTEXT
+
+
 def _current_audio_filename() -> str | None:
     with _PLAYBACK_LOCK:
         return _CURRENT_AUDIO_FILENAME
@@ -109,6 +169,16 @@ def _set_current_audio_filename(filename: str | None) -> None:
     with _PLAYBACK_LOCK:
         _CURRENT_AUDIO_FILENAME = filename
 
+
+def _current_audio_deck_id() -> int | None:
+    with _PLAYBACK_LOCK:
+        return _CURRENT_AUDIO_DECK_ID
+
+
+def _set_current_audio_deck_id(deck_id: int | None) -> None:
+    global _CURRENT_AUDIO_DECK_ID
+    with _PLAYBACK_LOCK:
+        _CURRENT_AUDIO_DECK_ID = deck_id
 
 
 def _profiles_path() -> Path:
@@ -211,12 +281,16 @@ def _profile_matches_config(profile: dict[str, Any], conf: dict[str, Any]) -> bo
 
 
 def _profile_entry_for_current_deck(
-    filename: str | None, conf: dict[str, Any]
+    filename: str | None,
+    conf: dict[str, Any],
+    deck_id: int | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     if not filename or not bool(conf.get("deck_profile_enabled", False)):
         return None, None
 
-    deck_id = _current_reviewer_deck_id()
+    deck_id = deck_id if deck_id is not None else _current_audio_deck_id()
+    if deck_id is None:
+        deck_id = _current_reviewer_deck_id()
     profile = _get_deck_profile(deck_id)
     if not profile or not _profile_matches_config(profile, conf):
         return profile, None
@@ -231,6 +305,7 @@ def _profile_entry_for_current_deck(
 def _apply_native_settings(
     player: Any | None = None,
     filename: str | None = None,
+    deck_id: int | None = None,
     *,
     update_filters: bool = True,
 ) -> tuple[bool, str]:
@@ -270,7 +345,10 @@ def _apply_native_settings(
     if _is_materialized_audio(filename):
         return True, t(lang, "status_materialized_audio")
 
-    profile, entry = _profile_entry_for_current_deck(filename, conf)
+    if deck_id is None:
+        profile, entry = _profile_entry_for_current_deck(filename, conf)
+    else:
+        profile, entry = _profile_entry_for_current_deck(filename, conf, deck_id)
     if entry is not None:
         try:
             gain_db = float(entry.get("gain_db", 0.0))
@@ -313,9 +391,12 @@ def _tag_filename(tag: Any) -> str | None:
     return None
 
 
-def _push_status(text: str) -> None:
-    reviewer = getattr(mw, "reviewer", None)
-    web = getattr(reviewer, "web", None)
+def _push_status(text: str, context: object | None = None) -> None:
+    target = context or _active_card_context()
+    web = _context_web(target)
+    if not web:
+        reviewer = getattr(mw, "reviewer", None)
+        web = getattr(reviewer, "web", None)
     if not web:
         return
     try:
@@ -376,9 +457,14 @@ def _deck_profile_summary(deck_id: int, deck_name: str | None = None) -> dict[st
     return result
 
 
-def _push_deck_profile_state(state: dict[str, Any]) -> None:
-    reviewer = getattr(mw, "reviewer", None)
-    web = getattr(reviewer, "web", None)
+def _push_deck_profile_state(
+    state: dict[str, Any], context: object | None = None
+) -> None:
+    target = context or _active_card_context()
+    web = _context_web(target)
+    if not web:
+        reviewer = getattr(mw, "reviewer", None)
+        web = getattr(reviewer, "web", None)
     if not web:
         return
     try:
@@ -480,8 +566,8 @@ def _collect_deck_audio_files(deck_id: int) -> tuple[str, list[str]]:
     return deck_name, sorted(files, key=str.casefold)
 
 
-def _start_deck_analysis(context: aqt.reviewer.Reviewer) -> None:
-    card = getattr(context, "card", None) or _current_reviewer_card()
+def _start_deck_analysis(context: object) -> None:
+    card = _card_from_context(context) or _current_reviewer_card()
     if not card:
         return
 
@@ -656,13 +742,25 @@ def _start_deck_analysis(context: aqt.reviewer.Reviewer) -> None:
     mw.taskman.run_in_background(worker, on_done)
 
 
+def _on_av_player_will_play_tags(tags: list[Any], side: str, context: object) -> None:
+    del tags, side
+    if not _is_supported_card_context(context):
+        _set_current_audio_deck_id(None)
+        return
+    _set_active_card_context(context)
+    card = _card_from_context(context)
+    _set_current_audio_deck_id(_card_deck_id(card) if card else None)
+
+
 def _on_av_player_will_play(tag: Any) -> None:
     # O Anki define current_player antes deste hook e só chama player.play()
     # depois. Assim o filtro já está pronto quando o arquivo começa a tocar.
     filename = _tag_filename(tag)
     _set_current_audio_filename(filename)
     player = av_player.current_player
-    _supported, status = _apply_native_settings(player, filename)
+    _supported, status = _apply_native_settings(
+        player, filename, deck_id=_current_audio_deck_id()
+    )
     if status:
         _push_status(status)
 
@@ -672,15 +770,33 @@ def _on_av_player_did_end_playing(player: Any) -> None:
 
 
 def _on_card_will_show(text: str, card, kind: str) -> str:
-    if kind not in ("reviewQuestion", "reviewAnswer") or not _card_has_audio(card):
+    kind_info = {
+        "reviewQuestion": ("reviewer", "question"),
+        "reviewAnswer": ("reviewer", "answer"),
+        "previewQuestion": ("previewer", "question"),
+        "previewAnswer": ("previewer", "answer"),
+        "clayoutQuestion": ("card_layout", "question"),
+        "clayoutAnswer": ("card_layout", "answer"),
+    }.get(kind)
+    if kind_info is None:
+        return text
+
+    surface, side = kind_info
+    # No revisor, o painel só aparece em cards com áudio. Em pré-visualização
+    # ele também aparece sem áudio para ajudar a detectar/configurar a face.
+    if surface == "reviewer" and not _card_has_audio(card):
         return text
 
     conf = _config()
     lang = _language(conf)
     deck_id = _card_deck_id(card)
     deck_name = _deck_name(deck_id)
+    side_tags = card.question_av_tags() if side == "question" else card.answer_av_tags()
     payload = {
         "language": lang,
+        "surface": surface,
+        "side": side,
+        "side_audio_count": len(_audio_filenames(side_tags)),
         "i18n": web_strings(lang),
         "speed": max(0.25, min(2.0, float(conf.get("speed", 1.0)))),
         "volume": max(0.0, min(1.0, float(conf.get("volume", 1.0)))),
@@ -707,23 +823,26 @@ setTimeout(function() {{
 def _on_webview_will_set_content(
     web_content: WebContent, context: object | None
 ) -> None:
-    if not isinstance(context, aqt.reviewer.Reviewer):
+    if not _is_supported_card_context(context):
         return
+    _set_active_card_context(context)
     addon_package = mw.addonManager.addonFromModule(__name__)
     web_content.css.append(f"/_addons/{addon_package}/web/audio_controller.css")
     web_content.js.append(f"/_addons/{addon_package}/web/audio_controller.js")
 
 
 def _on_js_message(handled, message: str, context):
-    if not isinstance(context, aqt.reviewer.Reviewer):
+    if not _is_supported_card_context(context):
         return handled
+    _set_active_card_context(context)
+    card = _card_from_context(context) or _current_reviewer_card()
 
     if message == "ferreis_audio:deck:analyze":
         _start_deck_analysis(context)
         return (True, None)
 
     if message == "ferreis_audio:deck:clear":
-        card = getattr(context, "card", None) or _current_reviewer_card()
+        card = _card_from_context(context) or _current_reviewer_card()
         if card:
             deck_id = _card_deck_id(card)
             _clear_deck_profile(deck_id)
@@ -766,25 +885,27 @@ def _on_js_message(handled, message: str, context):
         elif key == "loudness_target":
             value = max(-50.0, min(-20.0, float(raw)))
             _save_setting("loudness_target", value)
-            deck_id = _current_reviewer_deck_id()
+            deck_id = _card_deck_id(card) if card else _current_reviewer_deck_id()
             if deck_id is not None:
-                _push_deck_profile_state(_deck_profile_summary(deck_id))
+                _push_deck_profile_state(_deck_profile_summary(deck_id), context)
         elif key == "dual_mono":
             value = raw == "1"
             _save_setting("dual_mono", value)
-            deck_id = _current_reviewer_deck_id()
+            deck_id = _card_deck_id(card) if card else _current_reviewer_deck_id()
             if deck_id is not None:
-                _push_deck_profile_state(_deck_profile_summary(deck_id))
+                _push_deck_profile_state(_deck_profile_summary(deck_id), context)
         else:
             return handled
 
         update_filters = key in {"normalize", "loudness_target", "dual_mono"}
         _supported, status = _apply_native_settings(
             filename=_current_audio_filename(),
+            deck_id=_card_deck_id(card) if card else _current_audio_deck_id(),
             update_filters=update_filters,
         )
-        if status:
-            context.web.eval(
+        web = _context_web(context)
+        if status and web:
+            web.eval(
                 "window.FerreisAnkiAudio && window.FerreisAnkiAudio.setStatus("
                 + json.dumps(status, ensure_ascii=False)
                 + ");"
@@ -800,6 +921,7 @@ mw.addonManager.setWebExports(__name__, r"web/.*\.(css|js)")
 gui_hooks.card_will_show.append(_on_card_will_show)
 gui_hooks.webview_will_set_content.append(_on_webview_will_set_content)
 gui_hooks.webview_did_receive_js_message.append(_on_js_message)
+gui_hooks.av_player_will_play_tags.append(_on_av_player_will_play_tags)
 gui_hooks.av_player_will_play.append(_on_av_player_will_play)
 gui_hooks.av_player_did_end_playing.append(_on_av_player_did_end_playing)
 
