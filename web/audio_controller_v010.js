@@ -53,6 +53,18 @@
       `;
       block.insertBefore(engine, actions);
 
+      const materialize = document.createElement("div");
+      materialize.className = "fac-materialize-audio";
+      materialize.innerHTML = `
+        <label class="fac-check-row fac-materialize-template-wrap" title="${t("insert_normalized_template_hint")}">
+          <input class="fac-materialize-template" type="checkbox">
+          <span>${t("insert_normalized_template")}</span>
+        </label>
+        <button class="fac-action fac-materialize-normalized" type="button">${t("materialize_audio")}</button>
+        <div class="fac-materialize-note"></div>
+      `;
+      actions.insertAdjacentElement("afterend", materialize);
+
       const oldAnalyze = this.root.querySelector(".fac-analyze-deck");
       if (oldAnalyze) {
         const fresh = oldAnalyze.cloneNode(true);
@@ -71,6 +83,16 @@
       });
       this.root.querySelector(".fac-install-ffmpeg").addEventListener("click", () => {
         pycmd("ferreis_audio:v010:ffmpeg:install");
+      });
+      this.root.querySelector(".fac-materialize-normalized").addEventListener("click", () => {
+        this.state.materializing = true;
+        this.updateState(this.state);
+        pycmd("ferreis_audio:v010:materialize");
+      });
+      this.root.querySelector(".fac-materialize-template").addEventListener("change", (event) => {
+        const enabled = Boolean(event.target.checked);
+        this.state.insert_normalized_template = enabled;
+        pycmd(`ferreis_audio:v010:materialize:insert:${enabled ? 1 : 0}`);
       });
 
       const base = window.FerreisAnkiAudio;
@@ -191,7 +213,10 @@
       const status = this.root.querySelector(".fac-engine-status");
       const install = this.root.querySelector(".fac-install-ffmpeg");
       const note = this.root.querySelector(".fac-engine-note");
-      if (!select || !status || !install || !note) return;
+      const materialize = this.root.querySelector(".fac-materialize-normalized");
+      const materializeTemplate = this.root.querySelector(".fac-materialize-template");
+      const materializeNote = this.root.querySelector(".fac-materialize-note");
+      if (!select || !status || !install || !note || !materialize || !materializeTemplate || !materializeNote) return;
 
       select.value = this.state.analysis_backend || "auto";
       select.disabled = Boolean(this.state.analyzing || this.state.ffmpeg?.installing);
@@ -210,6 +235,29 @@
       install.disabled = Boolean(ff.installing || this.state.analyzing);
       install.textContent = ff.installing ? t("ffmpeg_installing_ui") : t("install_ffmpeg");
       note.textContent = resolved === "webaudio" ? t("webaudio_hint") : t("ffmpeg_installer_hint");
+
+      materializeTemplate.checked = this.state.insert_normalized_template !== false;
+      materializeTemplate.disabled = Boolean(this.state.materializing || this.state.analyzing);
+      materialize.disabled = Boolean(
+        this.state.materializing ||
+        this.state.analyzing ||
+        !this.state.exists ||
+        this.state.stale ||
+        !ff.available
+      );
+      materialize.textContent = this.state.materializing ? t("materializing_audio") : t("materialize_audio");
+      if (!ff.available) {
+        materializeNote.textContent = t("materialize_requires_ffmpeg");
+      } else if (this.state.stale) {
+        materializeNote.textContent = t("materialize_profile_stale");
+      } else if (Number(this.state.materialized_audio_count || 0) > 0) {
+        materializeNote.textContent = t("materialized_summary", {
+          count: Number(this.state.materialized_audio_count || 0),
+          notes: Number(this.state.materialized_note_count || 0),
+        });
+      } else {
+        materializeNote.textContent = t("materialize_hint");
+      }
     },
 
     mediaUrl(filename) {

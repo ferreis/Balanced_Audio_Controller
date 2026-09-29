@@ -17,11 +17,12 @@ class AnalysisEngineTests(unittest.TestCase):
         self.assertEqual(analysis_engine.resolve_backend("webaudio", True), "webaudio")
 
     def test_parse_loudnorm_json(self) -> None:
-        stderr = "prefix\n{\n  \"input_i\" : \"-23.41\",\n  \"input_tp\" : \"-1.20\",\n  \"input_lra\" : \"3.10\",\n  \"input_thresh\" : \"-33.00\"\n}\nsuffix"
+        stderr = "prefix\n{\n  \"input_i\" : \"-23.41\",\n  \"input_tp\" : \"-1.20\",\n  \"input_lra\" : \"3.10\",\n  \"input_thresh\" : \"-33.00\",\n  \"target_offset\" : \"-0.15\"\n}\nsuffix"
         parsed = analysis_engine.parse_loudnorm_json(stderr)
         self.assertIsNotNone(parsed)
         self.assertAlmostEqual(parsed["input_i"], -23.41)
         self.assertAlmostEqual(parsed["input_tp"], -1.20)
+        self.assertAlmostEqual(parsed["target_offset"], -0.15)
 
     def test_extract_only_expected_binary_member(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
