@@ -140,37 +140,38 @@ class AudioControllerPlaywrightTests(unittest.TestCase):
         page.add_script_tag(path=str(SCRIPT))
         page.evaluate("window.FerreisAnkiAudio.mount()")
         page.add_script_tag(path=str(SCRIPT_V010))
-        page.wait_for_selector(".fac-analysis-backend")
+        page.wait_for_selector(".fac-panel-toggle")
         return page
 
-    def test_backend_controls_and_install_command(self) -> None:
+    def test_reviewer_panel_keeps_only_study_controls(self) -> None:
         page = self.page_with_config(base_config())
         try:
-            self.assertEqual(page.locator(".fac-analysis-backend").input_value(), "auto")
-            self.assertEqual(page.locator(".fac-engine-status").inner_text(), "Built-in")
-            self.assertTrue(page.locator(".fac-install-ffmpeg").is_visible())
-            page.locator(".fac-install-ffmpeg").click()
-            self.assertIn("ferreis_audio:v010:ffmpeg:install", page.evaluate("window.__pycmdMessages"))
-            page.locator(".fac-analysis-backend").select_option("webaudio")
-            self.assertIn("ferreis_audio:v010:backend:webaudio", page.evaluate("window.__pycmdMessages"))
+            for selector in (
+                ".fac-speed",
+                ".fac-volume",
+                ".fac-normalize",
+                ".fac-deck-badge",
+                ".fac-deck-name",
+                ".fac-analyze-deck",
+            ):
+                self.assertTrue(page.locator(selector).is_visible(), selector)
+
+            for selector in (
+                ".fac-loudness",
+                ".fac-dual-mono",
+                ".fac-deck-enable",
+                ".fac-clear-deck",
+                ".fac-analysis-backend",
+                ".fac-install-ffmpeg",
+                ".fac-prepare-normalized-field",
+                ".fac-materialize-normalized",
+                ".fac-materialize-template",
+            ):
+                self.assertEqual(page.locator(selector).count(), 0, selector)
+
+            page.evaluate("window.__pycmdMessages=[]")
             page.locator(".fac-analyze-deck").click()
             self.assertIn("ferreis_audio:v010:analyze", page.evaluate("window.__pycmdMessages"))
-        finally:
-            page.close()
-
-    def test_ffmpeg_available_hides_installer(self) -> None:
-        config = base_config()
-        config["deck_profile"]["ffmpeg"] = {
-            "available": True,
-            "installing": False,
-            "installer_available": True,
-            "installer_name": "imageio-ffmpeg 0.6.0",
-        }
-        config["deck_profile"]["resolved_backend"] = "ffmpeg"
-        page = self.page_with_config(config)
-        try:
-            self.assertEqual(page.locator(".fac-engine-status").inner_text(), "FFmpeg available")
-            self.assertFalse(page.locator(".fac-install-ffmpeg").is_visible())
         finally:
             page.close()
 
@@ -234,100 +235,19 @@ class AudioControllerPlaywrightTests(unittest.TestCase):
             page.close()
 
 
-    def test_loudness_slider_commits_only_on_change(self) -> None:
+    def test_normalization_toggle_remains_in_quick_panel(self) -> None:
         page = self.page_with_config(base_config())
         try:
             page.evaluate("window.__pycmdMessages=[]")
-            slider = page.locator(".fac-loudness")
-            slider.evaluate(
-                """el => {
-                    el.value = '-30';
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                }"""
-            )
-            self.assertEqual(page.evaluate("window.__pycmdMessages"), [])
-            self.assertEqual(
-                page.locator(".fac-loudness-value").inner_text(), "-30 LUFS"
-            )
-
-            slider.evaluate(
-                """el => el.dispatchEvent(new Event('change', { bubbles: true }))"""
-            )
-            self.assertEqual(
-                page.evaluate("window.__pycmdMessages"),
-                ["ferreis_audio:set:loudness_target:-30"],
-            )
-        finally:
-            page.close()
-
-
-    def test_prepare_field_and_html_does_not_require_ffmpeg(self) -> None:
-        page = self.page_with_config(base_config())
-        try:
-            prepare = page.locator(".fac-prepare-normalized-field")
-            materialize = page.locator(".fac-materialize-normalized")
-            self.assertTrue(prepare.is_disabled())
-            self.assertTrue(materialize.is_disabled())
-
-            page.evaluate(
-                """window.BACV010.updateState({
-                    exists: true,
-                    stale: false,
-                    ffmpeg: { available: false, installing: false, installer_available: true },
-                    insert_normalized_template: true
-                })"""
-            )
-            self.assertFalse(prepare.is_disabled())
-            self.assertTrue(materialize.is_disabled())
-
-            page.evaluate("window.__pycmdMessages=[]")
-            prepare.click()
-            self.assertIn(
-                "ferreis_audio:v010:prepare-field",
-                page.evaluate("window.__pycmdMessages"),
-            )
-
-            page.evaluate(
-                """window.BACV010.updateState({
-                    normalized_field_count: 1,
-                    normalized_template_count: 1
-                })"""
-            )
-            self.assertIn("1 field(s)", page.locator(".fac-field-setup-note").inner_text())
-        finally:
-            page.close()
-
-    def test_materialize_controls_require_profile_and_ffmpeg(self) -> None:
-        config = base_config()
-        page = self.page_with_config(config)
-        try:
-            button = page.locator(".fac-materialize-normalized")
-            checkbox = page.locator(".fac-materialize-template")
-            self.assertTrue(button.is_disabled())
-            self.assertTrue(checkbox.is_checked())
-            self.assertEqual(page.locator(".fac-materialize-note").inner_text(), "FFmpeg required")
-
-            page.evaluate(
-                """window.BACV010.updateState({
-                    exists: true,
-                    stale: false,
-                    ffmpeg: { available: true, installing: false, installer_available: true },
-                    insert_normalized_template: true
-                })"""
-            )
-            self.assertFalse(button.is_disabled())
-            page.evaluate("window.__pycmdMessages=[]")
-            button.click()
-            self.assertIn("ferreis_audio:v010:materialize", page.evaluate("window.__pycmdMessages"))
-
-            page.evaluate("window.BACV010.updateState({ materializing: false, analyzing: false })")
+            checkbox = page.locator(".fac-normalize")
             checkbox.uncheck()
             self.assertIn(
-                "ferreis_audio:v010:materialize:insert:0",
+                "ferreis_audio:set:normalize:0",
                 page.evaluate("window.__pycmdMessages"),
             )
         finally:
             page.close()
+
 
 
 

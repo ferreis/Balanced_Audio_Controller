@@ -74,20 +74,6 @@
                 <input class="fac-normalize" type="checkbox">
                 <span>${t("realtime_normalization")}</span>
               </label>
-
-              <div class="fac-normalization-settings">
-                <div class="fac-row fac-row-label">
-                  <span>${t("target_loudness")}</span>
-                  <span class="fac-loudness-value"></span>
-                </div>
-                <input class="fac-loudness" type="range" min="-50" max="-20" step="1" title="${t("target_loudness_hint")}">
-                <div class="fac-range-hint"><span>-50</span><span>-20 LUFS</span></div>
-
-                <label class="fac-check-row fac-dual-mono-wrap" title="${t("dual_mono_hint")}">
-                  <input class="fac-dual-mono" type="checkbox">
-                  <span>${t("dual_mono")}</span>
-                </label>
-              </div>
             </section>
 
             <section class="fac-block fac-deck-profile-block">
@@ -98,14 +84,8 @@
 
               <div class="fac-deck-name" title=""></div>
 
-              <label class="fac-check-row fac-deck-enable-wrap" title="${t("use_analyzed_profile_hint")}">
-                <input class="fac-deck-enable" type="checkbox">
-                <span>${t("use_analyzed_profile")}</span>
-              </label>
-
               <div class="fac-deck-actions">
                 <button class="fac-action fac-analyze-deck" type="button">${t("analyze_deck")}</button>
-                <button class="fac-action fac-action-secondary fac-clear-deck" type="button">${t("clear")}</button>
               </div>
 
               <div class="fac-deck-progress" hidden>
@@ -135,13 +115,6 @@
       const normalize = this.root.querySelector(".fac-normalize");
       normalize.checked = Boolean(this.config.normalize);
 
-      const loudness = this.root.querySelector(".fac-loudness");
-      loudness.value = String(Math.round(clamp(Number(this.config.loudness_target ?? -24), -50, -20)));
-      this.updateLoudnessValue(Number(loudness.value));
-
-      const dualMono = this.root.querySelector(".fac-dual-mono");
-      dualMono.checked = Boolean(this.config.dual_mono);
-      this.updateNormalizationEnabledState();
 
       this.root.querySelector(".fac-speed-down").addEventListener("click", () => this.stepSpeed(-1));
       this.root.querySelector(".fac-speed-up").addEventListener("click", () => this.stepSpeed(1));
@@ -174,34 +147,9 @@
 
       normalize.addEventListener("change", (event) => {
         this.config.normalize = Boolean(event.target.checked);
-        this.updateNormalizationEnabledState();
         pycmd(`ferreis_audio:set:normalize:${this.config.normalize ? 1 : 0}`);
       });
 
-      loudness.addEventListener("input", () => {
-        const value = clamp(Number(loudness.value), -50, -20);
-        this.config.loudness_target = value;
-        this.updateLoudnessValue(value);
-      });
-
-      loudness.addEventListener("change", () => {
-        const value = clamp(Number(loudness.value), -50, -20);
-        this.config.loudness_target = value;
-        this.updateLoudnessValue(value);
-        pycmd(`ferreis_audio:set:loudness_target:${value}`);
-      });
-
-      dualMono.addEventListener("change", (event) => {
-        this.config.dual_mono = Boolean(event.target.checked);
-        pycmd(`ferreis_audio:set:dual_mono:${this.config.dual_mono ? 1 : 0}`);
-      });
-
-      this.root.querySelector(".fac-deck-enable").addEventListener("change", (event) => {
-        const enabled = Boolean(event.target.checked);
-        if (!this.config.deck_profile) this.config.deck_profile = {};
-        this.config.deck_profile.enabled = enabled;
-        pycmd(`ferreis_audio:deck:enable:${enabled ? 1 : 0}`);
-      });
 
       this.root.querySelector(".fac-analyze-deck").addEventListener("click", () => {
         this.updateDeckProfile({
@@ -213,9 +161,6 @@
         pycmd("ferreis_audio:deck:analyze");
       });
 
-      this.root.querySelector(".fac-clear-deck").addEventListener("click", () => {
-        pycmd("ferreis_audio:deck:clear");
-      });
 
       this.updateDeckProfile(this.config.deck_profile || {});
       this.enableSidePanelDrag();
@@ -241,19 +186,6 @@
       input.style.width = `${width}ch`;
     },
 
-    updateLoudnessValue(value) {
-      const output = this.root?.querySelector(".fac-loudness-value");
-      if (output) output.textContent = `${Math.round(Number(value))} LUFS`;
-    },
-
-    updateNormalizationEnabledState() {
-      const enabled = Boolean(this.config.normalize);
-      const settings = this.root?.querySelector(".fac-normalization-settings");
-      if (settings) settings.classList.toggle("fac-disabled", !enabled);
-      for (const element of this.root?.querySelectorAll(".fac-normalization-settings input") || []) {
-        element.disabled = !enabled;
-      }
-    },
 
     updateDeckProfile(state) {
       if (!this.root) return;
@@ -262,9 +194,7 @@
 
       const name = this.root.querySelector(".fac-deck-name");
       const badge = this.root.querySelector(".fac-deck-badge");
-      const enable = this.root.querySelector(".fac-deck-enable");
       const analyze = this.root.querySelector(".fac-analyze-deck");
-      const clear = this.root.querySelector(".fac-clear-deck");
       const summary = this.root.querySelector(".fac-deck-summary");
       const progressWrap = this.root.querySelector(".fac-deck-progress");
       const progressBar = this.root.querySelector(".fac-deck-progress-bar");
@@ -274,12 +204,7 @@
         name.textContent = profile.deck_name || this.t("current_deck");
         name.title = name.textContent;
       }
-      if (enable) {
-        enable.checked = Boolean(profile.enabled);
-        enable.disabled = !profile.exists || Boolean(profile.analyzing);
-      }
       if (analyze) analyze.disabled = Boolean(profile.analyzing);
-      if (clear) clear.disabled = !profile.exists || Boolean(profile.analyzing);
 
       if (badge) {
         badge.classList.remove("fac-badge-ok", "fac-badge-warn", "fac-badge-busy");
