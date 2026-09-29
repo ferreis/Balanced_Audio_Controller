@@ -96,6 +96,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('README.md')
+          path.write_text(path.read_text(encoding='utf-8').rstrip() + '\n', encoding='utf-8')
+          PY
           git config user.name "Rafael Fernando dos reis Mecabô"
           git config user.email "rafa_ferreis@hotmail.com"
           git add analysis_engine.py normalized_audio.py v010.py i18n.py config.json config.schema.json build.py README.md web/audio_controller_v010.js tests/test_analysis_engine.py tests/test_normalized_audio.py tests/test_audio_controller_playwright.py
