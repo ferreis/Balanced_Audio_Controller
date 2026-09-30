@@ -159,13 +159,22 @@ def _copy_sound_tag(tag: SoundOrVideoTag, filename: str) -> SoundOrVideoTag:
             return SoundOrVideoTag(filename=filename)
 
 
-def _on_av_player_will_play_tags(tags: list[Any], side: str, context: object) -> None:
-    del side
+def _current_playback_deck_id() -> int | None:
     core = _core()
+    context = core._active_card_context()
     if not core._is_supported_card_context(context):
-        return
+        return None
     card = core._card_from_context(context)
-    deck_id = core._card_deck_id(card) if card else core._current_audio_deck_id()
+    if card is None:
+        card = core._current_reviewer_card()
+    return core._card_deck_id(card) if card else None
+
+
+def _rewrite_playback_tags(tags: list[Any], deck_id: int | None) -> list[Any]:
+    core = _core()
+    if deck_id is None:
+        return list(tags)
+
     mode = _playback_mode()
     mapping = _available_materialized_mapping(deck_id) if mode == "created" else {}
 
@@ -206,7 +215,21 @@ def _on_av_player_will_play_tags(tags: list[Any], side: str, context: object) ->
             continue
         seen_audio.add(key)
         rewritten.append(tag if selected == filename else _copy_sound_tag(tag, selected))
-    tags[:] = rewritten
+    return rewritten
+
+
+_ORIGINAL_PLAY_TAGS = getattr(
+    av_player, "_bac_v011_original_play_tags", av_player.play_tags
+)
+
+
+def _play_tags_without_mutating_render_cache(tags: list[Any]) -> None:
+    # Card.question_av_tags()/answer_av_tags() retornam a lista mantida dentro do
+    # render_output cacheado pelo Anki. Alterar essa lista quebra os índices
+    # play:q:N/play:a:N já inseridos no HTML e causa IndexError no replay manual.
+    # Transformamos uma cópia somente na fronteira do player nativo.
+    rewritten = _rewrite_playback_tags(list(tags), _current_playback_deck_id())
+    _ORIGINAL_PLAY_TAGS(rewritten)
 
 
 def _profile_entry(filename: str | None, conf: dict[str, Any], deck_id: int | None):
@@ -555,7 +578,9 @@ def _install() -> None:
     core._apply_native_settings = _apply_native_settings
     v010._state = _state
     v010._open_settings_dialog = _open_settings_dialog
-    gui_hooks.av_player_will_play_tags.append(_on_av_player_will_play_tags)
+    if not hasattr(av_player, "_bac_v011_original_play_tags"):
+        setattr(av_player, "_bac_v011_original_play_tags", _ORIGINAL_PLAY_TAGS)
+    av_player.play_tags = _play_tags_without_mutating_render_cache
     gui_hooks.webview_did_receive_js_message.append(_on_message)
     gui_hooks.webview_will_set_content.append(_on_web_content)
 
