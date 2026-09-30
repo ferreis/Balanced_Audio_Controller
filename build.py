@@ -12,6 +12,7 @@ INCLUDE_FILES = [
     "analysis_engine.py",
     "normalized_audio.py",
     "v010.py",
+    "v011.py",
     "i18n.py",
     "config.json",
     "config.schema.json",
@@ -50,6 +51,7 @@ def build() -> Path:
             "web/audio_controller.css",
             "web/audio_controller.js",
             "web/audio_controller_v010.js",
+            "web/audio_controller_v011.js",
         }
         missing = sorted(required - names)
         if missing:
