@@ -169,6 +169,17 @@ def _on_av_player_will_play_tags(tags: list[Any], side: str, context: object) ->
     mode = _playback_mode()
     mapping = _available_materialized_mapping(deck_id) if mode == "created" else {}
 
+    generated_present = False
+    if mode == "created":
+        for candidate_tag in tags:
+            if not isinstance(candidate_tag, SoundOrVideoTag):
+                continue
+            candidate_name = str(candidate_tag.filename or "")
+            candidate_ext = candidate_name.rsplit(".", 1)[-1].lower() if "." in candidate_name else ""
+            if candidate_ext in core.AUDIO_EXTENSIONS and _safe_generated_filename(candidate_name):
+                generated_present = True
+                break
+
     rewritten: list[Any] = []
     seen_audio: set[str] = set()
     for tag in tags:
@@ -179,6 +190,13 @@ def _on_av_player_will_play_tags(tags: list[Any], side: str, context: object) ->
         extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
         if extension not in core.AUDIO_EXTENSIONS:
             rewritten.append(tag)
+            continue
+        if (
+            mode == "created"
+            and generated_present
+            and not core._is_materialized_audio(filename)
+            and filename not in mapping
+        ):
             continue
         selected = _selected_filename(filename, mode, mapping)
         if selected is None:
