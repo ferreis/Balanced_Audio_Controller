@@ -109,6 +109,37 @@ class AudioControllerV011PlaywrightTests(unittest.TestCase):
         finally:
             page.close()
 
+    def test_switching_mode_does_not_change_anki_replay_indices(self) -> None:
+        page = self.page_with_config(base_config())
+        try:
+            page.evaluate(
+                """() => {
+                    const host = document.createElement('div');
+                    host.id = 'anki-replay-fixture';
+                    host.innerHTML = `
+                      <a class="replay-button soundLink" onclick="pycmd('play:q:0'); return false;"></a>
+                      <a class="replay-button soundLink" onclick="pycmd('play:q:1'); return false;"></a>
+                    `;
+                    document.body.prepend(host);
+                }"""
+            )
+            before = page.locator("#anki-replay-fixture .replay-button").evaluate_all(
+                "els => els.map(el => el.getAttribute('onclick'))"
+            )
+
+            selector = page.locator(".fac-playback-mode-select")
+            selector.select_option("created")
+            selector.select_option("profile")
+            selector.select_option("realtime")
+
+            after = page.locator("#anki-replay-fixture .replay-button").evaluate_all(
+                "els => els.map(el => el.getAttribute('onclick'))"
+            )
+            self.assertEqual(after, before)
+            self.assertEqual(page.locator("#anki-replay-fixture .replay-button").count(), 2)
+        finally:
+            page.close()
+
 
 if __name__ == "__main__":
     unittest.main()
