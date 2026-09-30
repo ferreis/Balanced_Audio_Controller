@@ -1,5 +1,6 @@
 {
   "language": "auto",
+  "playback_mode": "realtime",
   "normalize": true,
   "loudness_target": -24,
   "dual_mono": false,

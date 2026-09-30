@@ -1,0 +1,563 @@
+from __future__ import annotations
+
+import sys
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
+
+from anki.sound import SoundOrVideoTag
+from aqt import gui_hooks, mw
+from aqt.sound import av_player
+from aqt.webview import WebContent
+
+from .i18n import t
+from . import v010
+
+PLAYBACK_MODES = {"profile", "realtime", "created"}
+
+
+def _core():
+    return sys.modules[__package__]
+
+
+def _conf() -> dict[str, Any]:
+    return mw.addonManager.getConfig(__package__) or {}
+
+
+def _playback_mode(conf: dict[str, Any] | None = None) -> str:
+    current = conf if conf is not None else _conf()
+    configured = str(current.get("playback_mode", "")).strip().lower()
+    if configured in PLAYBACK_MODES:
+        return configured
+    if bool(current.get("deck_profile_enabled", False)):
+        return "profile"
+    if bool(current.get("normalize", True)):
+        return "realtime"
+    return "created"
+
+
+def _save_playback_mode(mode: str) -> str:
+    normalized = str(mode or "").strip().lower()
+    if normalized not in PLAYBACK_MODES:
+        normalized = "realtime"
+    conf = _conf()
+    conf["playback_mode"] = normalized
+    conf["normalize"] = normalized == "realtime"
+    conf["deck_profile_enabled"] = normalized == "profile"
+    mw.addonManager.writeConfig(__package__, conf)
+    return normalized
+
+
+def _local(lang: str, key: str, **values: Any) -> str:
+    messages = {
+        "en": {
+            "playback_mode": "Playback mode",
+            "mode_profile": "Analyzed profile",
+            "mode_realtime": "Real time",
+            "mode_created": "Created audio",
+            "mode_hint": "Choose one source of normalization: analyzed gain, real-time loudnorm, or the normalized audio copies created by the add-on.",
+            "mode_profile_hint": "Uses the gain measured for each file when the deck was analyzed. If the profile is missing or outdated, no fallback normalization is applied.",
+            "mode_realtime_hint": "Normalizes the original audio while it plays using the native MPV/FFmpeg loudnorm filter.",
+            "mode_created_hint": "Plays the generated bac_norm_* copy when available, removes duplicate generated tags and does not normalize it again.",
+            "language_hint": "Automatic follows the computer language; unsupported languages use English.",
+            "analysis_hint": "Automatic prefers FFmpeg and falls back to the built-in analyzer. FFmpeg is more accurate; the built-in analyzer needs no external executable.",
+            "analyze_hint": "Measures the current deck and stores a per-file normalization profile.",
+            "clear_hint": "Deletes only the analyzed profile for the current deck. Original media files are not removed.",
+            "status_profile_missing": "Analyzed-profile mode · no valid gain for this audio",
+            "status_profile_stale": "Analyzed-profile mode · profile is outdated; reanalyze the deck",
+            "status_created_missing": "Created-audio mode · normalized copy not found; original audio is playing without runtime normalization",
+        },
+        "pt-BR": {
+            "playback_mode": "Modo de reprodução",
+            "mode_profile": "Perfil analisado",
+            "mode_realtime": "Em tempo real",
+            "mode_created": "Áudios criados",
+            "mode_hint": "Escolha uma única fonte de normalização: ganho do perfil analisado, loudnorm em tempo real ou as cópias normalizadas criadas pelo add-on.",
+            "mode_profile_hint": "Usa o ganho medido para cada arquivo quando o deck foi analisado. Se o perfil estiver ausente ou desatualizado, não aplica normalização alternativa.",
+            "mode_realtime_hint": "Normaliza o áudio original enquanto ele toca usando o filtro loudnorm do MPV/FFmpeg nativo.",
+            "mode_created_hint": "Reproduz a cópia bac_norm_* quando existir, remove tags geradas duplicadas e não normaliza essa cópia novamente.",
+            "language_hint": "Automático segue o idioma do computador; idiomas não suportados usam inglês.",
+            "analysis_hint": "Automático prefere FFmpeg e usa o analisador interno como fallback. FFmpeg é mais preciso; o analisador interno não exige executável externo.",
+            "analyze_hint": "Mede os áudios do deck atual e salva um perfil de normalização por arquivo.",
+            "clear_hint": "Exclui somente o perfil analisado do deck atual. Os arquivos de mídia originais não são removidos.",
+            "status_profile_missing": "Modo perfil analisado · não há ganho válido para este áudio",
+            "status_profile_stale": "Modo perfil analisado · perfil desatualizado; reanalise o deck",
+            "status_created_missing": "Modo áudios criados · cópia normalizada não encontrada; o original está tocando sem normalização em tempo real",
+        },
+    }
+    language = "pt-BR" if lang == "pt-BR" else "en"
+    text = messages[language].get(key, key)
+    return text.format(**values)
+
+
+def _safe_generated_filename(filename: Any) -> str | None:
+    value = str(filename or "").strip()
+    if not value or "\x00" in value or "/" in value or "\\" in value:
+        return None
+    core = _core()
+    if not core._is_materialized_audio(value):
+        return None
+    extension = value.rsplit(".", 1)[-1].lower() if "." in value else ""
+    if extension not in core.AUDIO_EXTENSIONS:
+        return None
+    return value
+
+
+def _available_materialized_mapping(deck_id: int | None) -> dict[str, str]:
+    if deck_id is None:
+        return {}
+    core = _core()
+    profile = core._get_deck_profile(deck_id)
+    if not isinstance(profile, dict):
+        return {}
+    materialized = profile.get("materialized")
+    if not isinstance(materialized, dict):
+        return {}
+    files = materialized.get("files")
+    if not isinstance(files, dict):
+        return {}
+
+    try:
+        media_root = Path(mw.col.media.dir()).resolve(strict=True)
+    except (OSError, RuntimeError, ValueError, AttributeError):
+        return {}
+
+    result: dict[str, str] = {}
+    for source, raw_target in files.items():
+        source_name = str(source or "")
+        target = _safe_generated_filename(raw_target)
+        if not source_name or "\x00" in source_name or target is None:
+            continue
+        try:
+            candidate = (media_root / target).resolve(strict=True)
+            candidate.relative_to(media_root)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if candidate.is_file():
+            result[source_name] = target
+    return result
+
+
+def _selected_filename(filename: str, mode: str, mapping: dict[str, str]) -> str | None:
+    core = _core()
+    if mode == "created":
+        if core._is_materialized_audio(filename):
+            return _safe_generated_filename(filename)
+        return mapping.get(filename) or filename
+    if core._is_materialized_audio(filename):
+        return None
+    return filename
+
+
+def _copy_sound_tag(tag: SoundOrVideoTag, filename: str) -> SoundOrVideoTag:
+    try:
+        return replace(tag, filename=filename)
+    except Exception:
+        try:
+            return type(tag)(filename=filename)
+        except Exception:
+            return SoundOrVideoTag(filename=filename)
+
+
+def _on_av_player_will_play_tags(tags: list[Any], side: str, context: object) -> None:
+    del side
+    core = _core()
+    if not core._is_supported_card_context(context):
+        return
+    card = core._card_from_context(context)
+    deck_id = core._card_deck_id(card) if card else core._current_audio_deck_id()
+    mode = _playback_mode()
+    mapping = _available_materialized_mapping(deck_id) if mode == "created" else {}
+
+    generated_present = False
+    if mode == "created":
+        for candidate_tag in tags:
+            if not isinstance(candidate_tag, SoundOrVideoTag):
+                continue
+            candidate_name = str(candidate_tag.filename or "")
+            candidate_ext = candidate_name.rsplit(".", 1)[-1].lower() if "." in candidate_name else ""
+            if candidate_ext in core.AUDIO_EXTENSIONS and _safe_generated_filename(candidate_name):
+                generated_present = True
+                break
+
+    rewritten: list[Any] = []
+    seen_audio: set[str] = set()
+    for tag in tags:
+        if not isinstance(tag, SoundOrVideoTag):
+            rewritten.append(tag)
+            continue
+        filename = str(tag.filename or "")
+        extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        if extension not in core.AUDIO_EXTENSIONS:
+            rewritten.append(tag)
+            continue
+        if (
+            mode == "created"
+            and generated_present
+            and not core._is_materialized_audio(filename)
+            and filename not in mapping
+        ):
+            continue
+        selected = _selected_filename(filename, mode, mapping)
+        if selected is None:
+            continue
+        key = selected.casefold()
+        if key in seen_audio:
+            continue
+        seen_audio.add(key)
+        rewritten.append(tag if selected == filename else _copy_sound_tag(tag, selected))
+    tags[:] = rewritten
+
+
+def _profile_entry(filename: str | None, conf: dict[str, Any], deck_id: int | None):
+    core = _core()
+    if not filename:
+        return None, None
+    if deck_id is None:
+        deck_id = core._current_audio_deck_id()
+    if deck_id is None:
+        deck_id = core._current_reviewer_deck_id()
+    profile = core._get_deck_profile(deck_id)
+    if not isinstance(profile, dict):
+        return None, None
+    if not core._profile_matches_config(profile, conf):
+        return profile, None
+    files = profile.get("files")
+    if not isinstance(files, dict):
+        return profile, None
+    entry = files.get(filename)
+    return profile, entry if isinstance(entry, dict) else None
+
+
+def _apply_native_settings(
+    player: Any | None = None,
+    filename: str | None = None,
+    deck_id: int | None = None,
+    *,
+    update_filters: bool = True,
+) -> tuple[bool, str]:
+    core = _core()
+    conf = _conf()
+    lang = core._language(conf)
+    player = player or av_player.current_player
+    if not core._is_mpv_player(player):
+        return False, t(lang, "status_native_no_mpv")
+
+    speed = max(0.25, min(2.0, float(conf.get("speed", 1.0))))
+    volume = max(0.0, min(1.0, float(conf.get("volume", 1.0))))
+    target = max(-50.0, min(-20.0, float(conf.get("loudness_target", -24.0))))
+    try:
+        player.set_property("speed", speed)
+        player.set_property("volume", volume * 100.0)
+    except Exception as exc:
+        print("[Balanced Audio Controller] unable to set MPV speed/volume:", exc)
+        return False, t(lang, "status_mpv_control_failed")
+
+    if not update_filters:
+        return True, ""
+    if filename is None:
+        filename = core._current_audio_filename()
+
+    core._remove_filter(player, core.NORMALIZE_FILTER_NAME)
+    core._remove_filter(player, core.DECK_GAIN_FILTER_NAME)
+
+    if core._is_materialized_audio(filename):
+        return True, t(lang, "status_materialized_audio")
+
+    mode = _playback_mode(conf)
+    if mode == "profile":
+        profile, entry = _profile_entry(filename, conf, deck_id)
+        if entry is not None:
+            try:
+                gain_db = float(entry.get("gain_db", 0.0))
+                player.command("af", "add", core._deck_gain_filter(gain_db))
+                return True, t(lang, "status_deck_profile_gain", gain=gain_db)
+            except Exception as exc:
+                print("[Balanced Audio Controller] unable to apply deck gain:", exc)
+        if profile and not core._profile_matches_config(profile, conf):
+            return True, _local(lang, "status_profile_stale")
+        return True, _local(lang, "status_profile_missing")
+
+    if mode == "realtime":
+        try:
+            player.command("af", "add", core._normalizer_filter(conf))
+            return True, t(lang, "status_realtime_normalization", prefix="", target=target)
+        except Exception as exc:
+            print("[Balanced Audio Controller] loudnorm unavailable:", exc)
+            return True, t(lang, "status_loudnorm_unavailable", prefix="")
+
+    return True, _local(lang, "status_created_missing")
+
+
+_ORIGINAL_STATE = v010._state
+
+
+def _state(deck_id: int, deck_name: str | None = None) -> dict[str, Any]:
+    state = _ORIGINAL_STATE(deck_id, deck_name)
+    mode = _playback_mode()
+    state["playback_mode"] = mode
+    state["enabled"] = mode == "profile"
+    return state
+
+
+def _description_label(text: str, parent):
+    from aqt.qt import QLabel
+
+    label = QLabel(text, parent)
+    label.setWordWrap(True)
+    label.setStyleSheet("color: palette(mid); font-size: 11px;")
+    return label
+
+
+def _open_settings_dialog(context: object | None = None) -> None:
+    from aqt.qt import (
+        QCheckBox,
+        QComboBox,
+        QDialog,
+        QDialogButtonBox,
+        QDoubleSpinBox,
+        QFormLayout,
+        QGroupBox,
+        QHBoxLayout,
+        QLabel,
+        QPushButton,
+        QRadioButton,
+        QVBoxLayout,
+        QWidget,
+        qconnect,
+    )
+
+    lang = _core()._language(_conf())
+    conf = _conf()
+    core = _core()
+    action_context = context if core._is_supported_card_context(context) else v010._active_reviewer()
+    dialog = QDialog(mw)
+    dialog.setWindowTitle(t(lang, "settings_title"))
+    dialog.setMinimumWidth(560)
+    layout = QVBoxLayout(dialog)
+    form = QFormLayout()
+
+    def add_row(label_text: str, control, description: str) -> None:
+        wrapper = QWidget(dialog)
+        wrapper_layout = QVBoxLayout(wrapper)
+        wrapper_layout.setContentsMargins(0, 0, 0, 0)
+        wrapper_layout.setSpacing(3)
+        wrapper_layout.addWidget(control)
+        wrapper_layout.addWidget(_description_label(description, wrapper))
+        form.addRow(label_text, wrapper)
+
+    language = QComboBox(dialog)
+    language.addItem("Automático / Automatic", "auto")
+    language.addItem("English", "en")
+    language.addItem("Português (Brasil)", "pt-BR")
+    language_index = language.findData(str(conf.get("language", "auto")))
+    language.setCurrentIndex(language_index if language_index >= 0 else 0)
+    add_row(t(lang, "settings_language"), language, _local(lang, "language_hint"))
+
+    mode_box = QWidget(dialog)
+    mode_layout = QHBoxLayout(mode_box)
+    mode_layout.setContentsMargins(0, 0, 0, 0)
+    mode_buttons: dict[str, QRadioButton] = {}
+    for mode, key in (
+        ("profile", "mode_profile"),
+        ("realtime", "mode_realtime"),
+        ("created", "mode_created"),
+    ):
+        button = QRadioButton(_local(lang, key), mode_box)
+        mode_buttons[mode] = button
+        mode_layout.addWidget(button)
+    mode_buttons[_playback_mode(conf)].setChecked(True)
+    add_row(_local(lang, "playback_mode"), mode_box, _local(lang, "mode_hint"))
+
+    target = QDoubleSpinBox(dialog)
+    target.setRange(-50.0, -20.0)
+    target.setDecimals(0)
+    target.setSingleStep(1.0)
+    target.setSuffix(" LUFS")
+    target.setValue(max(-50.0, min(-20.0, float(conf.get("loudness_target", -24.0)))))
+    add_row(t(lang, "target_loudness"), target, t(lang, "target_loudness_hint"))
+
+    dual_mono = QCheckBox(t(lang, "dual_mono"), dialog)
+    dual_mono.setChecked(bool(conf.get("dual_mono", False)))
+    add_row("", dual_mono, t(lang, "dual_mono_hint"))
+
+    backend = QComboBox(dialog)
+    backend.addItem(t(lang, "analysis_auto"), "auto")
+    backend.addItem(t(lang, "analysis_ffmpeg"), "ffmpeg")
+    backend.addItem(t(lang, "analysis_webaudio"), "webaudio")
+    backend_index = backend.findData(str(conf.get("analysis_backend", "auto")))
+    backend.setCurrentIndex(backend_index if backend_index >= 0 else 0)
+    add_row(t(lang, "analysis_method"), backend, _local(lang, "analysis_hint"))
+
+    insert_template = QCheckBox(t(lang, "insert_normalized_template"), dialog)
+    insert_template.setChecked(bool(conf.get("normalized_audio_insert_template", True)))
+    add_row("", insert_template, t(lang, "insert_normalized_template_hint"))
+    layout.addLayout(form)
+
+    ffmpeg_group = QGroupBox(t(lang, "settings_ffmpeg"), dialog)
+    ffmpeg_outer = QVBoxLayout(ffmpeg_group)
+    ffmpeg_layout = QHBoxLayout()
+    ffmpeg_state = v010._ffmpeg_state()
+    ffmpeg_label = QLabel(
+        t(lang, "ffmpeg_ready") if ffmpeg_state.get("available") else t(lang, "ffmpeg_missing"),
+        ffmpeg_group,
+    )
+    install_button = QPushButton(t(lang, "install_ffmpeg"), ffmpeg_group)
+    install_button.setEnabled(
+        not bool(ffmpeg_state.get("available"))
+        and bool(ffmpeg_state.get("installer_available"))
+        and not bool(ffmpeg_state.get("installing"))
+    )
+    ffmpeg_layout.addWidget(ffmpeg_label, 1)
+    ffmpeg_layout.addWidget(install_button)
+    ffmpeg_outer.addLayout(ffmpeg_layout)
+    ffmpeg_outer.addWidget(_description_label(t(lang, "ffmpeg_installer_hint"), ffmpeg_group))
+    layout.addWidget(ffmpeg_group)
+
+    actions_group = QGroupBox(t(lang, "settings_current_deck"), dialog)
+    actions_layout = QVBoxLayout(actions_group)
+    current = v010._current_deck(action_context) if action_context else None
+    if current:
+        deck_label = QLabel(current[1], actions_group)
+        deck_label.setWordWrap(True)
+        actions_layout.addWidget(deck_label)
+    else:
+        hint = _description_label(t(lang, "settings_no_active_deck"), actions_group)
+        actions_layout.addWidget(hint)
+
+    action_specs = [
+        (t(lang, "analyze_deck"), v010._start_analysis, _local(lang, "analyze_hint")),
+        (t(lang, "prepare_normalized_field"), v010._prepare_normalized_field_setup, t(lang, "prepare_normalized_field_hint")),
+        (t(lang, "materialize_audio"), v010._start_materialization, t(lang, "materialize_hint")),
+        (t(lang, "settings_clear_profile"), v010._clear_current_deck_profile, _local(lang, "clear_hint")),
+    ]
+    action_buttons: list[tuple[QPushButton, Any]] = []
+    for title, action, description in action_specs:
+        button = QPushButton(title, actions_group)
+        button.setEnabled(action_context is not None and current is not None)
+        actions_layout.addWidget(button)
+        actions_layout.addWidget(_description_label(description, actions_group))
+        action_buttons.append((button, action))
+    layout.addWidget(actions_group)
+
+    def selected_mode() -> str:
+        for mode, button in mode_buttons.items():
+            if button.isChecked():
+                return mode
+        return "realtime"
+
+    def apply_settings() -> None:
+        updated = _conf()
+        mode = selected_mode()
+        updated["language"] = str(language.currentData() or "auto")
+        updated["playback_mode"] = mode
+        updated["normalize"] = mode == "realtime"
+        updated["deck_profile_enabled"] = mode == "profile"
+        updated["loudness_target"] = float(target.value())
+        updated["dual_mono"] = bool(dual_mono.isChecked())
+        selected_backend = str(backend.currentData() or "auto")
+        updated["analysis_backend"] = selected_backend if selected_backend in {"auto", "ffmpeg", "webaudio"} else "auto"
+        updated["normalized_audio_insert_template"] = bool(insert_template.isChecked())
+        mw.addonManager.writeConfig(__package__, updated)
+
+        current_deck = v010._current_deck(action_context)
+        _supported, status = core._apply_native_settings(
+            filename=core._current_audio_filename(),
+            deck_id=current_deck[0] if current_deck else core._current_audio_deck_id(),
+            update_filters=True,
+        )
+        if status:
+            core._push_status(status, action_context)
+        if current_deck:
+            v010._push_state(_state(*current_deck))
+
+    def install_ffmpeg_from_dialog() -> None:
+        v010._install_ffmpeg()
+        ffmpeg_label.setText(t(lang, "ffmpeg_installing_ui"))
+        install_button.setEnabled(False)
+
+    def run_action(action) -> None:
+        if action_context is None or current is None:
+            return
+        apply_settings()
+        action(action_context)
+
+    qconnect(install_button.clicked, install_ffmpeg_from_dialog)
+    for button, action in action_buttons:
+        qconnect(button.clicked, lambda _checked=False, current_action=action: run_action(current_action))
+
+    buttons = QDialogButtonBox(
+        QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+    )
+
+    def save_and_close() -> None:
+        apply_settings()
+        dialog.accept()
+
+    qconnect(buttons.accepted, save_and_close)
+    qconnect(buttons.rejected, dialog.reject)
+    layout.addWidget(buttons)
+    dialog.exec()
+
+
+def _refresh_mode(context: object | None) -> None:
+    core = _core()
+    current = v010._current_deck(context)
+    _supported, status = core._apply_native_settings(
+        filename=core._current_audio_filename(),
+        deck_id=current[0] if current else core._current_audio_deck_id(),
+        update_filters=True,
+    )
+    if status:
+        core._push_status(status, context)
+    if current:
+        v010._push_state(_state(*current))
+
+
+def _on_message(handled, message: str, context):
+    if message.startswith("ferreis_audio:v011:mode:"):
+        mode = message.rsplit(":", 1)[-1]
+        if mode not in PLAYBACK_MODES:
+            return (True, None)
+        _save_playback_mode(mode)
+        _refresh_mode(context)
+        return (True, None)
+
+    if message.startswith("ferreis_audio:set:normalize:"):
+        value = message.rsplit(":", 1)[-1] == "1"
+        if value:
+            _save_playback_mode("realtime")
+        elif _playback_mode() == "realtime":
+            current = v010._current_deck(context)
+            profile = _core()._get_deck_profile(current[0]) if current else None
+            _save_playback_mode("profile" if isinstance(profile, dict) else "created")
+        _refresh_mode(context)
+        return (True, None)
+
+    if message.startswith("ferreis_audio:deck:enable:"):
+        enabled = message.rsplit(":", 1)[-1] == "1"
+        _save_playback_mode("profile" if enabled else "realtime")
+        _refresh_mode(context)
+        return (True, None)
+    return handled
+
+
+def _on_web_content(web_content: WebContent, context: object | None) -> None:
+    core = _core()
+    if not core._is_supported_card_context(context):
+        return
+    package = mw.addonManager.addonFromModule(__package__)
+    web_content.js.append(f"/_addons/{package}/web/audio_controller_v011.js")
+
+
+def _install() -> None:
+    core = _core()
+    core._apply_native_settings = _apply_native_settings
+    v010._state = _state
+    v010._open_settings_dialog = _open_settings_dialog
+    gui_hooks.av_player_will_play_tags.append(_on_av_player_will_play_tags)
+    gui_hooks.webview_did_receive_js_message.append(_on_message)
+    gui_hooks.webview_will_set_content.append(_on_web_content)
+
+
+_install()
