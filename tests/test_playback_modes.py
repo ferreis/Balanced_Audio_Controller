@@ -72,47 +72,15 @@ class PlaybackModeTests(unittest.TestCase):
         self.assertIsNone(selected_filename("bac_norm_1234_voice.m4a", "profile", mapping))
         self.assertIsNone(selected_filename("bac_norm_1234_voice.m4a", "realtime", mapping))
 
-    def test_created_mode_does_not_play_original_with_existing_generated_tag(self) -> None:
+    def _rewrite_namespace(self, mapping: dict[str, str]):
         core = SimpleNamespace(
-            _is_supported_card_context=lambda _context: True,
-            _card_from_context=lambda _context: None,
-            _current_audio_deck_id=lambda: 1,
             _is_materialized_audio=lambda value: str(value).startswith("bac_norm_"),
             AUDIO_EXTENSIONS={"mp3", "m4a"},
         )
-        selected = lambda filename, _mode, mapping: (
-            filename if filename.startswith("bac_norm_") else mapping.get(filename, filename)
-        )
-        ns = {
-            "Any": Any,
-            "SoundOrVideoTag": FakeTag,
-            "_core": lambda: core,
-            "_playback_mode": lambda: "created",
-            "_available_materialized_mapping": lambda _deck_id: {},
-            "_safe_generated_filename": lambda value: value if str(value).startswith("bac_norm_") else None,
-            "_selected_filename": selected,
-            "_copy_sound_tag": lambda tag, filename: FakeTag(filename),
-        }
-        rewrite = load_function("_on_av_player_will_play_tags", ns)
-        tags = [FakeTag("voice.mp3"), FakeTag("bac_norm_1234_voice.m4a")]
-
-        rewrite(tags, "question", object())
-
-        self.assertEqual([tag.filename for tag in tags], ["bac_norm_1234_voice.m4a"])
-
-    def test_created_mode_deduplicates_mapped_and_embedded_generated_audio(self) -> None:
-        core = SimpleNamespace(
-            _is_supported_card_context=lambda _context: True,
-            _card_from_context=lambda _context: None,
-            _current_audio_deck_id=lambda: 1,
-            _is_materialized_audio=lambda value: str(value).startswith("bac_norm_"),
-            AUDIO_EXTENSIONS={"mp3", "m4a"},
-        )
-        mapping = {"voice.mp3": "bac_norm_1234_voice.m4a"}
         selected = lambda filename, _mode, current_mapping: (
             filename if filename.startswith("bac_norm_") else current_mapping.get(filename, filename)
         )
-        ns = {
+        return {
             "Any": Any,
             "SoundOrVideoTag": FakeTag,
             "_core": lambda: core,
@@ -122,17 +90,66 @@ class PlaybackModeTests(unittest.TestCase):
             "_selected_filename": selected,
             "_copy_sound_tag": lambda tag, filename: FakeTag(filename),
         }
-        rewrite = load_function("_on_av_player_will_play_tags", ns)
+
+    def test_created_mode_keeps_render_cache_unchanged(self) -> None:
+        rewrite = load_function("_rewrite_playback_tags", self._rewrite_namespace({}))
+        tags = [FakeTag("voice.mp3"), FakeTag("bac_norm_1234_voice.m4a")]
+        original_ids = [id(tag) for tag in tags]
+
+        rewritten = rewrite(tags, 1)
+
+        self.assertEqual(
+            [tag.filename for tag in tags],
+            ["voice.mp3", "bac_norm_1234_voice.m4a"],
+        )
+        self.assertEqual([id(tag) for tag in tags], original_ids)
+        self.assertEqual(
+            [tag.filename for tag in rewritten],
+            ["bac_norm_1234_voice.m4a"],
+        )
+
+    def test_created_mode_deduplicates_copy_without_mutating_source(self) -> None:
+        mapping = {"voice.mp3": "bac_norm_1234_voice.m4a"}
+        rewrite = load_function("_rewrite_playback_tags", self._rewrite_namespace(mapping))
         tags = [FakeTag("voice.mp3"), FakeTag("bac_norm_1234_voice.m4a")]
 
-        rewrite(tags, "answer", object())
+        rewritten = rewrite(tags, 1)
 
-        self.assertEqual([tag.filename for tag in tags], ["bac_norm_1234_voice.m4a"])
+        self.assertEqual(
+            [tag.filename for tag in tags],
+            ["voice.mp3", "bac_norm_1234_voice.m4a"],
+        )
+        self.assertEqual(
+            [tag.filename for tag in rewritten],
+            ["bac_norm_1234_voice.m4a"],
+        )
 
-    def test_security_guards_are_present(self) -> None:
+    def test_player_wrapper_delegates_copy_and_preserves_clicked_tag_list(self) -> None:
+        delegated: list[list[str]] = []
+        ns = {
+            "Any": Any,
+            "_current_playback_deck_id": lambda: 42,
+            "_rewrite_playback_tags": lambda tags, deck_id: [FakeTag(f"normalized-{deck_id}.m4a")],
+            "_ORIGINAL_PLAY_TAGS": lambda tags: delegated.append([tag.filename for tag in tags]),
+        }
+        play_tags = load_function("_play_tags_without_mutating_render_cache", ns)
+        cached_tags = [FakeTag("voice.mp3"), FakeTag("bac_norm_voice.m4a")]
+
+        play_tags(cached_tags)
+
+        self.assertEqual(
+            [tag.filename for tag in cached_tags],
+            ["voice.mp3", "bac_norm_voice.m4a"],
+        )
+        self.assertEqual(delegated, [["normalized-42.m4a"]])
+
+    def test_security_and_cache_guards_are_present(self) -> None:
         self.assertIn("candidate.relative_to(media_root)", SOURCE)
         self.assertNotIn("shell=True", SOURCE)
-        self.assertIn("tags[:] = rewritten", SOURCE)
+        self.assertNotIn("tags[:] = rewritten", SOURCE)
+        self.assertNotIn("gui_hooks.av_player_will_play_tags.append", SOURCE)
+        self.assertIn("_ORIGINAL_PLAY_TAGS(rewritten)", SOURCE)
+        self.assertIn("av_player.play_tags = _play_tags_without_mutating_render_cache", SOURCE)
 
 
 if __name__ == "__main__":
