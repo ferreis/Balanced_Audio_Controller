@@ -23,6 +23,11 @@ def load_function(name: str, namespace: dict[str, Any]):
     return namespace[name]
 
 
+class FakeTag:
+    def __init__(self, filename: str) -> None:
+        self.filename = filename
+
+
 class PlaybackModeTests(unittest.TestCase):
     def test_explicit_and_legacy_modes(self) -> None:
         ns = {"Any": Any, "PLAYBACK_MODES": {"profile", "realtime", "created"}, "_conf": lambda: {}}
@@ -66,6 +71,63 @@ class PlaybackModeTests(unittest.TestCase):
         self.assertEqual(selected_filename("voice.mp3", "realtime", mapping), "voice.mp3")
         self.assertIsNone(selected_filename("bac_norm_1234_voice.m4a", "profile", mapping))
         self.assertIsNone(selected_filename("bac_norm_1234_voice.m4a", "realtime", mapping))
+
+    def test_created_mode_does_not_play_original_with_existing_generated_tag(self) -> None:
+        core = SimpleNamespace(
+            _is_supported_card_context=lambda _context: True,
+            _card_from_context=lambda _context: None,
+            _current_audio_deck_id=lambda: 1,
+            _is_materialized_audio=lambda value: str(value).startswith("bac_norm_"),
+            AUDIO_EXTENSIONS={"mp3", "m4a"},
+        )
+        selected = lambda filename, _mode, mapping: (
+            filename if filename.startswith("bac_norm_") else mapping.get(filename, filename)
+        )
+        ns = {
+            "Any": Any,
+            "SoundOrVideoTag": FakeTag,
+            "_core": lambda: core,
+            "_playback_mode": lambda: "created",
+            "_available_materialized_mapping": lambda _deck_id: {},
+            "_safe_generated_filename": lambda value: value if str(value).startswith("bac_norm_") else None,
+            "_selected_filename": selected,
+            "_copy_sound_tag": lambda tag, filename: FakeTag(filename),
+        }
+        rewrite = load_function("_on_av_player_will_play_tags", ns)
+        tags = [FakeTag("voice.mp3"), FakeTag("bac_norm_1234_voice.m4a")]
+
+        rewrite(tags, "question", object())
+
+        self.assertEqual([tag.filename for tag in tags], ["bac_norm_1234_voice.m4a"])
+
+    def test_created_mode_deduplicates_mapped_and_embedded_generated_audio(self) -> None:
+        core = SimpleNamespace(
+            _is_supported_card_context=lambda _context: True,
+            _card_from_context=lambda _context: None,
+            _current_audio_deck_id=lambda: 1,
+            _is_materialized_audio=lambda value: str(value).startswith("bac_norm_"),
+            AUDIO_EXTENSIONS={"mp3", "m4a"},
+        )
+        mapping = {"voice.mp3": "bac_norm_1234_voice.m4a"}
+        selected = lambda filename, _mode, current_mapping: (
+            filename if filename.startswith("bac_norm_") else current_mapping.get(filename, filename)
+        )
+        ns = {
+            "Any": Any,
+            "SoundOrVideoTag": FakeTag,
+            "_core": lambda: core,
+            "_playback_mode": lambda: "created",
+            "_available_materialized_mapping": lambda _deck_id: mapping,
+            "_safe_generated_filename": lambda value: value if str(value).startswith("bac_norm_") else None,
+            "_selected_filename": selected,
+            "_copy_sound_tag": lambda tag, filename: FakeTag(filename),
+        }
+        rewrite = load_function("_on_av_player_will_play_tags", ns)
+        tags = [FakeTag("voice.mp3"), FakeTag("bac_norm_1234_voice.m4a")]
+
+        rewrite(tags, "answer", object())
+
+        self.assertEqual([tag.filename for tag in tags], ["bac_norm_1234_voice.m4a"])
 
     def test_security_guards_are_present(self) -> None:
         self.assertIn("candidate.relative_to(media_root)", SOURCE)
