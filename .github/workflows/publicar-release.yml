@@ -1,7 +1,8 @@
 # Workflow de produção.
-# Descrição: valida o add-on em toda atualização da dev/main e cria uma release
-# automaticamente quando uma alteração chega à main. A versão base vem de
-# manifest.json; se ela já tiver sido publicada, cria uma build prerelease única.
+# Descrição: valida o add-on em toda atualização da dev/main e publica o pacote
+# automaticamente quando uma alteração chega à main. A primeira build de uma
+# versão cria a release estável; builds seguintes da mesma versão atualizam uma
+# única prerelease "-build", substituindo asset, notas e tag pelo build aprovado.
 name: Publicar release do add-on
 run-name: Validar e publicar release do Balanced Audio Controller
 
@@ -44,7 +45,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          .venv/bin/python -m compileall -q __init__.py analysis_engine.py normalized_audio.py i18n.py v010.py tests
+          .venv/bin/python -m compileall -q __init__.py analysis_engine.py normalized_audio.py i18n.py v010.py v011.py build.py tests
           .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
 
       - name: Validar segurança e versão
@@ -63,6 +64,8 @@ jobs:
               Path('analysis_engine.py'),
               Path('normalized_audio.py'),
               Path('v010.py'),
+              Path('v011.py'),
+              Path('build.py'),
           ]
 
           for arquivo in arquivos_python:
@@ -115,11 +118,16 @@ jobs:
               corrompido = arquivo.testzip()
               if corrompido:
                   raise SystemExit(f'pacote corrompido: {corrompido}')
+              nomes = set(arquivo.namelist())
+              obrigatorios = {'v011.py', 'web/audio_controller_v011.js'}
+              ausentes = sorted(obrigatorios - nomes)
+              if ausentes:
+                  raise SystemExit(f'arquivos ausentes no pacote: {", ".join(ausentes)}')
           print(pacote)
           PY
 
   publicar:
-    name: Criar release no GitHub
+    name: Criar ou atualizar release no GitHub
     needs: validar
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
@@ -132,7 +140,7 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Determinar versão e tipo da release
+      - name: Determinar versão e destino da release
         id: release
         shell: bash
         env:
@@ -152,33 +160,36 @@ jobs:
           )"
 
           BASE_TAG="v${VERSION}"
+          BUILD_TAG="${BASE_TAG}-build"
           ASSET="dist/Balanced_Audio_Controller-v${VERSION}.ankiaddon"
-          RELEASE_DATA="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq ".[] | select(.tag_name == \"${BASE_TAG}\") | [.id, .draft] | @tsv" | head -n 1 || true)"
+          BASE_DATA="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq ".[] | select(.tag_name == \"${BASE_TAG}\") | [.id, .draft] | @tsv" | head -n 1 || true)"
 
           TAG="${BASE_TAG}"
           TITLE="Balanced Audio Controller v${VERSION}"
           PRERELEASE="false"
-          REUSE_DRAFT="false"
+          ROLLING="false"
+          RELEASE_ID=""
 
-          if [[ -n "${RELEASE_DATA}" ]]; then
-            RELEASE_ID="$(printf '%s' "${RELEASE_DATA}" | cut -f1)"
-            IS_DRAFT="$(printf '%s' "${RELEASE_DATA}" | cut -f2)"
-            if [[ "${IS_DRAFT}" == "true" ]]; then
-              REUSE_DRAFT="true"
+          if [[ -n "${BASE_DATA}" ]]; then
+            BASE_RELEASE_ID="$(printf '%s' "${BASE_DATA}" | cut -f1)"
+            BASE_IS_DRAFT="$(printf '%s' "${BASE_DATA}" | cut -f2)"
+            if [[ "${BASE_IS_DRAFT}" == "true" ]]; then
+              RELEASE_ID="${BASE_RELEASE_ID}"
             else
-              TAG="${BASE_TAG}-build.${GITHUB_RUN_NUMBER}"
-              TITLE="Balanced Audio Controller v${VERSION} (build ${GITHUB_RUN_NUMBER})"
+              TAG="${BUILD_TAG}"
+              TITLE="Balanced Audio Controller v${VERSION} (build atual)"
               PRERELEASE="true"
+              ROLLING="true"
             fi
           elif git rev-parse -q --verify "refs/tags/${BASE_TAG}" >/dev/null; then
-            TAG="${BASE_TAG}-build.${GITHUB_RUN_NUMBER}"
-            TITLE="Balanced Audio Controller v${VERSION} (build ${GITHUB_RUN_NUMBER})"
+            TAG="${BUILD_TAG}"
+            TITLE="Balanced Audio Controller v${VERSION} (build atual)"
             PRERELEASE="true"
+            ROLLING="true"
           fi
 
-          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null && [[ "${REUSE_DRAFT}" != "true" ]]; then
-            echo "::error::A tag ${TAG} já existe."
-            exit 1
+          if [[ "${ROLLING}" == "true" ]]; then
+            RELEASE_ID="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq ".[] | select(.tag_name == \"${TAG}\") | .id" | head -n 1 || true)"
           fi
 
           {
@@ -187,7 +198,8 @@ jobs:
             echo "title=${TITLE}"
             echo "asset=${ASSET}"
             echo "prerelease=${PRERELEASE}"
-            echo "reuse_draft=${REUSE_DRAFT}"
+            echo "rolling=${ROLLING}"
+            echo "release_id=${RELEASE_ID}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Gerar pacote para publicação
@@ -218,10 +230,23 @@ jobs:
             echo "- Testes Python e Playwright aprovados."
             echo "- Auditoria de segurança aprovada."
             echo "- Pacote .ankiaddon validado antes da publicação."
+            echo "- Build de origem: \`${GITHUB_SHA}\`."
           } > release-notes.md
 
-      - name: Publicar release nova
-        if: steps.release.outputs.reuse_draft != 'true'
+      - name: Atualizar tag da build contínua
+        if: steps.release.outputs.rolling == 'true'
+        shell: bash
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag --force "${TAG}" "${GITHUB_SHA}"
+          git push --force origin "refs/tags/${TAG}"
+
+      - name: Criar release nova
+        if: steps.release.outputs.release_id == ''
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -241,21 +266,38 @@ jobs:
             --notes-file release-notes.md \
             "${EXTRA[@]}"
 
-      - name: Atualizar e publicar draft existente
-        if: steps.release.outputs.reuse_draft == 'true'
+      - name: Atualizar release existente
+        if: steps.release.outputs.release_id != ''
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.release.outputs.release_id }}
           TAG: ${{ steps.release.outputs.tag }}
           TITLE: ${{ steps.release.outputs.title }}
           ASSET: ${{ steps.release.outputs.asset }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
         run: |
           set -euo pipefail
           ASSET_NAME="$(basename "${ASSET}")"
           gh release delete-asset "${TAG}" "${ASSET_NAME}" --yes >/dev/null 2>&1 || true
           gh release upload "${TAG}" "${ASSET}"
-          gh release edit "${TAG}" \
-            --draft=false \
-            --target "${GITHUB_SHA}" \
-            --title "${TITLE}" \
-            --notes-file release-notes.md
+
+          python3 - <<'PY' > release-update.json
+          import json
+          import os
+          from pathlib import Path
+
+          payload = {
+              'tag_name': os.environ['TAG'],
+              'target_commitish': os.environ['GITHUB_SHA'],
+              'name': os.environ['TITLE'],
+              'body': Path('release-notes.md').read_text(encoding='utf-8'),
+              'draft': False,
+              'prerelease': os.environ['PRERELEASE'] == 'true',
+          }
+          print(json.dumps(payload, ensure_ascii=False))
+          PY
+
+          gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            --input release-update.json >/dev/null
