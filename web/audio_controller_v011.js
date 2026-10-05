@@ -435,13 +435,12 @@
     syncBusyState() {
       if (!this.root) return;
       const busy = Boolean(this.state.analyzing || this.state.materializing);
-      const profileReady = Boolean(this.state.exists) && !Boolean(this.state.stale);
       const analyze = this.root.querySelector(".fac-analyze-deck");
       const materialize = this.root.querySelector(".fac-created-materialize");
       const prepare = this.root.querySelector(".fac-created-prepare");
       if (analyze) analyze.disabled = busy;
-      if (materialize) materialize.disabled = busy || !profileReady;
-      if (prepare) prepare.disabled = busy || !profileReady;
+      if (materialize) materialize.disabled = busy;
+      if (prepare) prepare.disabled = busy;
     },
 
     attach(root) {
@@ -458,12 +457,18 @@
     },
 
     updateState(state) {
+      const incoming = state || {};
       const wasMaterializing = Boolean(this.state.materializing);
-      this.state = { ...this.state, ...(state || {}) };
+      const materializationSucceeded =
+        wasMaterializing &&
+        incoming.materializing === false &&
+        !incoming.error &&
+        Number(incoming.materialized_audio_count || 0) > 0;
+      this.state = { ...this.state, ...incoming };
       this.syncOverVolume();
       this.syncMode();
       this.syncBusyState();
-      if (wasMaterializing && !Boolean(this.state.materializing) && this.inferMode() === "created") {
+      if (materializationSucceeded && this.inferMode() === "created") {
         setTimeout(() => pycmd("ferreis_audio:v011:card:refresh"), 0);
       }
     },
