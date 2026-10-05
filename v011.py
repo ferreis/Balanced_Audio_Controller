@@ -425,6 +425,50 @@ def _push_workflow_notice(context: object | None, key: str) -> None:
     v010._push_state(state)
 
 
+def _created_action_blocked(context: object | None) -> bool:
+    current = v010._current_deck(context)
+    if not current:
+        return True
+    deck_id, deck_name = current
+    if _core()._analysis_is_running(deck_id):
+        _push_workflow_notice(context, "busy_analyzing")
+        return True
+    if _deck_is_materializing(deck_id, deck_name):
+        _push_workflow_notice(context, "busy_materializing")
+        return True
+    return False
+
+
+def _force_created_template_integration() -> None:
+    conf = _conf()
+    if bool(conf.get("normalized_audio_insert_template", True)):
+        return
+    conf["normalized_audio_insert_template"] = True
+    mw.addonManager.writeConfig(__package__, conf)
+
+
+def _refresh_card_context(context: object | None) -> bool:
+    core = _core()
+    if not core._is_supported_card_context(context):
+        return False
+    surface = core._context_surface(context)
+    try:
+        if surface == "reviewer":
+            reviewer = context or getattr(mw, "reviewer", None)
+            redraw = getattr(reviewer, "_redraw_current_card", None)
+            if callable(redraw):
+                redraw()
+                return True
+        elif surface == "previewer":
+            render = getattr(context, "render_card", None)
+            if callable(render):
+                render()
+                return True
+    except Exception as exc:
+        print("[Balanced Audio Controller] unable to refresh card:", exc)
+    return False
+
+
 def _start_analysis_coordinated(context) -> None:
     current = v010._current_deck(context)
     if current and _deck_is_materializing(*current):
@@ -731,6 +775,28 @@ def _refresh_mode(context: object | None) -> None:
 
 
 def _on_message(handled, message: str, context):
+    core = _core()
+    if not core._is_supported_card_context(context):
+        return handled
+    core._set_active_card_context(context)
+
+    if message == "ferreis_audio:v011:created:materialize":
+        if not _created_action_blocked(context):
+            _force_created_template_integration()
+            v010._start_materialization(context)
+        return (True, None)
+
+    if message == "ferreis_audio:v011:created:prepare":
+        if not _created_action_blocked(context):
+            _force_created_template_integration()
+            v010._prepare_normalized_field_setup(context)
+            _refresh_card_context(context)
+        return (True, None)
+
+    if message == "ferreis_audio:v011:card:refresh":
+        _refresh_card_context(context)
+        return (True, None)
+
     if message.startswith("ferreis_audio:v011:mode:"):
         mode = message.rsplit(":", 1)[-1]
         if mode not in PLAYBACK_MODES:

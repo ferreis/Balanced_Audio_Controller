@@ -150,6 +150,60 @@ class AudioControllerV011PlaywrightTests(unittest.TestCase):
         finally:
             page.close()
 
+    def test_created_mode_exposes_copy_field_and_card_refresh_actions(self) -> None:
+        config = base_config()
+        config["language"] = "pt-BR"
+        page = self.page_with_config(config)
+        try:
+            actions = page.locator(".fac-created-actions")
+            selector = page.locator(".fac-playback-mode-select")
+            self.assertTrue(actions.is_hidden())
+
+            page.evaluate(
+                "window.BACV010.updateState({exists: true, stale: false, analyzing: false, materializing: false})"
+            )
+            selector.select_option("created")
+            self.assertTrue(actions.is_visible())
+
+            create = page.locator(".fac-created-materialize")
+            prepare = page.locator(".fac-created-prepare")
+            refresh = page.locator(".fac-created-refresh")
+            self.assertEqual(create.inner_text(), "Criar cópias normalizadas")
+            self.assertEqual(prepare.inner_text(), "Criar campo de áudio + atualizar HTML")
+            self.assertEqual(refresh.inner_text(), "Atualizar card (F5)")
+            self.assertFalse(create.is_disabled())
+            self.assertFalse(prepare.is_disabled())
+
+            page.evaluate("window.__pycmdMessages=[]")
+            create.click()
+            self.assertIn(
+                "ferreis_audio:v011:created:materialize",
+                page.evaluate("window.__pycmdMessages"),
+            )
+            self.assertTrue(create.is_disabled())
+            self.assertTrue(prepare.is_disabled())
+
+            page.evaluate(
+                "window.BACV010.updateState({exists: true, stale: false, materializing: false, materialized_audio_count: 1})"
+            )
+            page.wait_for_timeout(20)
+            self.assertIn(
+                "ferreis_audio:v011:card:refresh",
+                page.evaluate("window.__pycmdMessages"),
+            )
+
+            page.evaluate("window.__pycmdMessages=[]")
+            prepare.click()
+            refresh.click()
+            messages = page.evaluate("window.__pycmdMessages")
+            self.assertIn("ferreis_audio:v011:created:prepare", messages)
+            self.assertIn("ferreis_audio:v011:card:refresh", messages)
+
+            selector.select_option("realtime")
+            self.assertTrue(actions.is_hidden())
+        finally:
+            page.close()
+
     def test_overvolume_switch_gain_and_backend_state_sync(self) -> None:
         page = self.page_with_config(base_config())
         try:

@@ -30,6 +30,10 @@
           overvolume: "OverVolume",
           overvolume_gain: "Extra gain",
           overvolume_hint: "Optional playback boost after the selected mode. Use it only when 100% volume is still too quiet.",
+          create_copies: "Create normalized copies",
+          prepare_field: "Create audio field + update HTML",
+          refresh_card: "Refresh card (F5)",
+          created_actions_hint: "These actions write permanent Anki media/fields. The original audio is preserved.",
         },
         "pt-BR": {
           group_playback: "Reprodução",
@@ -49,6 +53,10 @@
           overvolume: "OverVolume",
           overvolume_gain: "Ganho extra",
           overvolume_hint: "Boost opcional aplicado depois do modo escolhido. Use apenas quando 100% de volume ainda estiver baixo.",
+          create_copies: "Criar cópias normalizadas",
+          prepare_field: "Criar campo de áudio + atualizar HTML",
+          refresh_card: "Atualizar card (F5)",
+          created_actions_hint: "Estas ações gravam mídia/campos permanentes no Anki. O áudio original é preservado.",
         },
       };
       return dictionary[this.language()][key] || key;
@@ -144,10 +152,45 @@
           color: var(--fac-warning);
         }
         #ferreis-audio-controller .fac-playback-mode-hint,
-        #ferreis-audio-controller .fac-overvolume-hint {
+        #ferreis-audio-controller .fac-overvolume-hint,
+        #ferreis-audio-controller .fac-created-actions-hint {
           color: var(--fac-muted);
           font-size: 10px;
           line-height: 1.4;
+        }
+        #ferreis-audio-controller .fac-created-actions {
+          display: grid;
+          gap: 6px;
+          margin-top: 9px;
+          padding-top: 9px;
+          border-top: 1px solid var(--fac-divider);
+        }
+        #ferreis-audio-controller .fac-created-actions[hidden] {
+          display: none !important;
+        }
+        #ferreis-audio-controller .fac-created-actions button {
+          box-sizing: border-box;
+          width: 100%;
+          min-height: 31px;
+          padding: 5px 7px;
+          border: 1px solid var(--fac-border);
+          border-radius: 6px;
+          background: rgba(255, 255, 255, 0.035);
+          color: var(--fac-text);
+          font: inherit;
+          font-size: 10px;
+          line-height: 1.25;
+          white-space: normal;
+        }
+        #ferreis-audio-controller .fac-created-actions button:hover:not(:disabled) {
+          background: rgba(255, 255, 255, 0.075);
+        }
+        #ferreis-audio-controller .fac-created-actions button:disabled {
+          cursor: default;
+          opacity: 0.42;
+        }
+        #ferreis-audio-controller .fac-created-refresh {
+          color: var(--fac-muted) !important;
         }
         #ferreis-audio-controller .fac-overvolume-value {
           color: var(--fac-text);
@@ -266,6 +309,12 @@
           <option value="created">${this.text("created")}</option>
         </select>
         <div class="fac-playback-mode-hint"></div>
+        <div class="fac-created-actions" hidden>
+          <button class="fac-created-materialize" type="button">${this.text("create_copies")}</button>
+          <button class="fac-created-prepare" type="button">${this.text("prepare_field")}</button>
+          <button class="fac-created-refresh" type="button">${this.text("refresh_card")}</button>
+          <div class="fac-created-actions-hint">${this.text("created_actions_hint")}</div>
+        </div>
       `;
       anchor.parentNode.insertBefore(section, anchor);
 
@@ -275,6 +324,18 @@
         this.state.playback_mode = mode;
         this.syncMode();
         pycmd(`ferreis_audio:v011:mode:${mode}`);
+      });
+
+      section.querySelector(".fac-created-materialize").addEventListener("click", () => {
+        this.state.materializing = true;
+        this.syncBusyState();
+        pycmd("ferreis_audio:v011:created:materialize");
+      });
+      section.querySelector(".fac-created-prepare").addEventListener("click", () => {
+        pycmd("ferreis_audio:v011:created:prepare");
+      });
+      section.querySelector(".fac-created-refresh").addEventListener("click", () => {
+        pycmd("ferreis_audio:v011:card:refresh");
       });
     },
 
@@ -304,6 +365,9 @@
       const hint = this.root.querySelector(".fac-playback-mode-hint");
       if (hint) hint.textContent = this.text(`hint_${mode}`);
 
+      const createdActions = this.root.querySelector(".fac-created-actions");
+      if (createdActions) createdActions.hidden = mode !== "created";
+
       const stateBadge = this.root.querySelector(".fac-mode-state");
       if (stateBadge) {
         const readiness = this.modeReadiness(mode);
@@ -321,6 +385,7 @@
         base.config.normalize = mode === "realtime";
         if (base.config.deck_profile) base.config.deck_profile.enabled = mode === "profile";
       }
+      this.syncBusyState();
     },
 
     makeGroup(className, title, blocks, anchor) {
@@ -369,10 +434,13 @@
 
     syncBusyState() {
       if (!this.root) return;
+      const busy = Boolean(this.state.analyzing || this.state.materializing);
       const analyze = this.root.querySelector(".fac-analyze-deck");
-      if (analyze) {
-        analyze.disabled = Boolean(this.state.analyzing || this.state.materializing);
-      }
+      const materialize = this.root.querySelector(".fac-created-materialize");
+      const prepare = this.root.querySelector(".fac-created-prepare");
+      if (analyze) analyze.disabled = busy;
+      if (materialize) materialize.disabled = busy;
+      if (prepare) prepare.disabled = busy;
     },
 
     attach(root) {
@@ -389,10 +457,20 @@
     },
 
     updateState(state) {
-      this.state = { ...this.state, ...(state || {}) };
+      const incoming = state || {};
+      const wasMaterializing = Boolean(this.state.materializing);
+      const materializationSucceeded =
+        wasMaterializing &&
+        incoming.materializing === false &&
+        !incoming.error &&
+        Number(incoming.materialized_audio_count || 0) > 0;
+      this.state = { ...this.state, ...incoming };
       this.syncOverVolume();
       this.syncMode();
       this.syncBusyState();
+      if (materializationSucceeded && this.inferMode() === "created") {
+        setTimeout(() => pycmd("ferreis_audio:v011:card:refresh"), 0);
+      }
     },
 
     patchV010() {
