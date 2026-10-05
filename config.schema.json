@@ -57,6 +57,21 @@
       "title": "Initial volume / Volume inicial",
       "description": "Initial output volume, from 0 (mute) to 1 (100%). / Volume inicial de saída, de 0 (mudo) a 1 (100%)."
     },
+    "overvolume_enabled": {
+      "type": "boolean",
+      "default": false,
+      "title": "OverVolume / OverVolume",
+      "description": "Adds an extra playback-only gain after the selected normalization mode. Use it when audio is still too quiet at normal 100% volume. The original and generated media files are never modified. / Adiciona um ganho extra somente na reprodução depois do modo de normalização escolhido. Use quando o áudio continuar baixo mesmo com o volume normal em 100%. Os arquivos originais e gerados nunca são modificados."
+    },
+    "overvolume_gain_db": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 12,
+      "multipleOf": 0.5,
+      "default": 6.0,
+      "title": "OverVolume boost (dB) / Ganho do OverVolume (dB)",
+      "description": "Extra gain from 0 to +12 dB. A limiter is applied after the boost to reduce digital clipping, but large boosts can make noise and existing distortion more audible. / Ganho extra de 0 a +12 dB. Um limitador é aplicado depois do ganho para reduzir clipping digital, mas valores altos podem deixar ruído e distorções já existentes mais perceptíveis."
+    },
     "analysis_backend": {
       "type": "string",
       "title": "Deck analysis method / Método de análise do deck",
