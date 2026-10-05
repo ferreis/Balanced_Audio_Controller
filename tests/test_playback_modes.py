@@ -8,6 +8,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "v011.py").read_text(encoding="utf-8")
+V010_SOURCE = (ROOT / "v010.py").read_text(encoding="utf-8")
 
 
 def load_function(name: str, namespace: dict[str, Any]):
@@ -162,31 +163,21 @@ class PlaybackModeTests(unittest.TestCase):
         self.assertIsNone(safe_generated_filename("bac_norm_abcd_voice.exe"))
         self.assertIsNone(safe_generated_filename("bac_norm_abcd\x00voice.m4a"))
 
-    def test_created_mode_selects_generated_copy_and_other_modes_drop_it(self) -> None:
-        core = SimpleNamespace(
-            _is_materialized_audio=lambda value: str(value).startswith("bac_norm_")
-        )
-        ns = {
-            "_core": lambda: core,
-            "_safe_generated_filename": lambda value: value if str(value).startswith("bac_norm_") else None,
-        }
-        selected_filename = load_function("_selected_filename", ns)
+    def test_all_modes_preserve_original_and_generated_filename(self) -> None:
+        selected_filename = load_function("_selected_filename", {})
         mapping = {"voice.mp3": "bac_norm_1234_voice.m4a"}
 
-        self.assertEqual(selected_filename("voice.mp3", "created", mapping), "bac_norm_1234_voice.m4a")
-        self.assertEqual(selected_filename("bac_norm_1234_voice.m4a", "created", mapping), "bac_norm_1234_voice.m4a")
-        self.assertEqual(selected_filename("voice.mp3", "profile", mapping), "voice.mp3")
-        self.assertEqual(selected_filename("voice.mp3", "realtime", mapping), "voice.mp3")
-        self.assertIsNone(selected_filename("bac_norm_1234_voice.m4a", "profile", mapping))
-        self.assertIsNone(selected_filename("bac_norm_1234_voice.m4a", "realtime", mapping))
+        for mode in ("created", "profile", "realtime"):
+            self.assertEqual(selected_filename("voice.mp3", mode, mapping), "voice.mp3")
+            self.assertEqual(
+                selected_filename("bac_norm_1234_voice.m4a", mode, mapping),
+                "bac_norm_1234_voice.m4a",
+            )
 
     def _rewrite_namespace(self, mapping: dict[str, str]):
         core = SimpleNamespace(
             _is_materialized_audio=lambda value: str(value).startswith("bac_norm_"),
             AUDIO_EXTENSIONS={"mp3", "m4a"},
-        )
-        selected = lambda filename, _mode, current_mapping: (
-            filename if filename.startswith("bac_norm_") else current_mapping.get(filename, filename)
         )
         return {
             "Any": Any,
@@ -195,11 +186,11 @@ class PlaybackModeTests(unittest.TestCase):
             "_playback_mode": lambda: "created",
             "_available_materialized_mapping": lambda _deck_id: mapping,
             "_safe_generated_filename": lambda value: value if str(value).startswith("bac_norm_") else None,
-            "_selected_filename": selected,
+            "_selected_filename": lambda filename, _mode, _mapping: filename,
             "_copy_sound_tag": lambda tag, filename: FakeTag(filename),
         }
 
-    def test_created_mode_without_valid_mapping_falls_back_to_original_without_mutation(self) -> None:
+    def test_created_mode_keeps_original_and_normalized_native_players(self) -> None:
         rewrite = load_function("_rewrite_playback_tags", self._rewrite_namespace({}))
         tags = [FakeTag("voice.mp3"), FakeTag("bac_norm_1234_voice.m4a")]
         original_ids = [id(tag) for tag in tags]
@@ -207,11 +198,11 @@ class PlaybackModeTests(unittest.TestCase):
         rewritten = rewrite(tags, 1)
 
         self.assertEqual(
-            [tag.filename for tag in tags],
+            [tag.filename for tag in rewritten],
             ["voice.mp3", "bac_norm_1234_voice.m4a"],
         )
         self.assertEqual([id(tag) for tag in tags], original_ids)
-        self.assertEqual([tag.filename for tag in rewritten], ["voice.mp3"])
+        self.assertEqual([id(tag) for tag in rewritten], original_ids)
 
     def test_created_mode_does_not_inject_generated_copy_missing_from_native_card(self) -> None:
         mapping = {"voice.mp3": "bac_norm_1234_voice.m4a"}
@@ -220,11 +211,10 @@ class PlaybackModeTests(unittest.TestCase):
 
         rewritten = rewrite(tags, 1)
 
-        self.assertEqual([tag.filename for tag in tags], ["voice.mp3"])
         self.assertEqual([tag.filename for tag in rewritten], ["voice.mp3"])
         self.assertIs(rewritten[0], tags[0])
 
-    def test_created_mode_deduplicates_copy_and_keeps_unmapped_original(self) -> None:
+    def test_created_mode_preserves_card_audio_order_without_deduplication(self) -> None:
         mapping = {"voice.mp3": "bac_norm_1234_voice.m4a"}
         rewrite = load_function("_rewrite_playback_tags", self._rewrite_namespace(mapping))
         tags = [
@@ -237,13 +227,10 @@ class PlaybackModeTests(unittest.TestCase):
         rewritten = rewrite(tags, 1)
 
         self.assertEqual(
-            [tag.filename for tag in tags],
+            [tag.filename for tag in rewritten],
             ["voice.mp3", "bac_norm_1234_voice.m4a", "bac_norm_old_voice.m4a", "other.mp3"],
         )
-        self.assertEqual(
-            [tag.filename for tag in rewritten],
-            ["bac_norm_1234_voice.m4a", "other.mp3"],
-        )
+        self.assertEqual([id(tag) for tag in rewritten], [id(tag) for tag in tags])
 
     def test_created_ready_requires_native_template_metadata(self) -> None:
         profile = {
@@ -322,12 +309,12 @@ class PlaybackModeTests(unittest.TestCase):
         coordinated(object())
         self.assertEqual(calls, ["analysis"])
 
-    def test_player_wrapper_delegates_copy_and_preserves_clicked_tag_list(self) -> None:
+    def test_player_wrapper_preserves_original_and_normalized_tag_list(self) -> None:
         delegated: list[list[str]] = []
         ns = {
             "Any": Any,
             "_current_playback_deck_id": lambda: 42,
-            "_rewrite_playback_tags": lambda tags, deck_id: [FakeTag(f"normalized-{deck_id}.m4a")],
+            "_rewrite_playback_tags": lambda tags, _deck_id: list(tags),
             "_ORIGINAL_PLAY_TAGS": lambda tags: delegated.append([tag.filename for tag in tags]),
         }
         play_tags = load_function("_play_tags_without_mutating_render_cache", ns)
@@ -339,7 +326,14 @@ class PlaybackModeTests(unittest.TestCase):
             [tag.filename for tag in cached_tags],
             ["voice.mp3", "bac_norm_voice.m4a"],
         )
-        self.assertEqual(delegated, [["normalized-42.m4a"]])
+        self.assertEqual(delegated, [["voice.mp3", "bac_norm_voice.m4a"]])
+
+    def test_generation_keeps_original_media_and_writes_dedicated_copy_field(self) -> None:
+        self.assertIn("stored_name = mw.col.media.add_file(str(path))", V010_SOURCE)
+        self.assertIn("note[field_name] = value", V010_SOURCE)
+        self.assertNotIn("mw.col.media.trash_files", V010_SOURCE)
+        self.assertNotIn("mw.col.media.remove", V010_SOURCE)
+        self.assertNotIn("source_path.unlink", V010_SOURCE)
 
     def test_security_and_cache_guards_are_present(self) -> None:
         self.assertIn("candidate.relative_to(media_root)", SOURCE)
@@ -347,6 +341,7 @@ class PlaybackModeTests(unittest.TestCase):
         self.assertNotIn("shell=True", SOURCE)
         self.assertNotIn("tags[:] = rewritten", SOURCE)
         self.assertNotIn("gui_hooks.av_player_will_play_tags.append", SOURCE)
+        self.assertIn("return list(tags)", SOURCE)
         self.assertIn("_ORIGINAL_PLAY_TAGS(rewritten)", SOURCE)
         self.assertIn("av_player.play_tags = _play_tags_without_mutating_render_cache", SOURCE)
         self.assertIn("OVERVOLUME_MAX_GAIN_DB = 12.0", SOURCE)
@@ -355,7 +350,6 @@ class PlaybackModeTests(unittest.TestCase):
         self.assertIn("v010._start_analysis = _start_analysis_coordinated", SOURCE)
         self.assertIn("v010._clear_current_deck_profile = _clear_profile_coordinated", SOURCE)
         self.assertIn('updated["normalized_audio_insert_template"] = True', SOURCE)
-        self.assertIn("native_generated", SOURCE)
         self.assertIn("_ensure_materialized_card_integration", SOURCE)
 
 
