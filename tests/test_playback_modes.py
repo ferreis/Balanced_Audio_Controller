@@ -213,6 +213,17 @@ class PlaybackModeTests(unittest.TestCase):
         self.assertEqual([id(tag) for tag in tags], original_ids)
         self.assertEqual([tag.filename for tag in rewritten], ["voice.mp3"])
 
+    def test_created_mode_does_not_inject_generated_copy_missing_from_native_card(self) -> None:
+        mapping = {"voice.mp3": "bac_norm_1234_voice.m4a"}
+        rewrite = load_function("_rewrite_playback_tags", self._rewrite_namespace(mapping))
+        tags = [FakeTag("voice.mp3")]
+
+        rewritten = rewrite(tags, 1)
+
+        self.assertEqual([tag.filename for tag in tags], ["voice.mp3"])
+        self.assertEqual([tag.filename for tag in rewritten], ["voice.mp3"])
+        self.assertIs(rewritten[0], tags[0])
+
     def test_created_mode_deduplicates_copy_and_keeps_unmapped_original(self) -> None:
         mapping = {"voice.mp3": "bac_norm_1234_voice.m4a"}
         rewrite = load_function("_rewrite_playback_tags", self._rewrite_namespace(mapping))
@@ -233,6 +244,62 @@ class PlaybackModeTests(unittest.TestCase):
             [tag.filename for tag in rewritten],
             ["bac_norm_1234_voice.m4a", "other.mp3"],
         )
+
+    def test_created_ready_requires_native_template_metadata(self) -> None:
+        profile = {
+            "materialized": {"insert_template": True},
+            "normalized_field_setup": {"insert_template": True, "template_count": 1},
+        }
+        core = SimpleNamespace(_get_deck_profile=lambda _deck_id: profile)
+        ns = {
+            "_core": lambda: core,
+            "_available_materialized_mapping": lambda _deck_id: {"voice.mp3": "bac_norm_voice.m4a"},
+        }
+        ready = load_function("_materialized_native_ready", ns)
+
+        self.assertTrue(ready(7, {"voice.mp3": "bac_norm_voice.m4a"}))
+        profile["materialized"]["insert_template"] = False
+        self.assertFalse(ready(7, {"voice.mp3": "bac_norm_voice.m4a"}))
+        profile["materialized"]["insert_template"] = True
+        profile["normalized_field_setup"]["template_count"] = 0
+        self.assertFalse(ready(7, {"voice.mp3": "bac_norm_voice.m4a"}))
+
+    def test_existing_generated_media_can_repair_native_card_integration(self) -> None:
+        writes: list[dict[str, Any]] = []
+        applied: list[tuple[Any, ...]] = []
+        repaired: set[int] = set()
+        profile = {"materialized": {"files": {"voice.mp3": "bac_norm_voice.m4a"}}}
+        conf = {"normalized_audio_insert_template": False}
+        core = SimpleNamespace(_get_deck_profile=lambda _deck_id: profile)
+        v010 = SimpleNamespace(
+            _current_deck=lambda _context: (7, "Deck"),
+            _collect_materialization_plan=lambda _deck_id, _profile: {"notes": {1: {"mid": 2}}},
+            _apply_materialization=lambda *args: applied.append(args),
+        )
+        mw = SimpleNamespace(
+            addonManager=SimpleNamespace(
+                writeConfig=lambda _package, value: writes.append(dict(value))
+            )
+        )
+        ns = {
+            "Any": Any,
+            "v010": v010,
+            "_available_materialized_mapping": lambda _deck_id: {"voice.mp3": "bac_norm_voice.m4a"},
+            "_core": lambda: core,
+            "_conf": lambda: conf,
+            "mw": mw,
+            "__package__": "ferreis_audio_controller",
+            "_NATIVE_INTEGRATION_REPAIRED": repaired,
+        }
+        repair = load_function("_ensure_materialized_card_integration", ns)
+
+        self.assertTrue(repair(object()))
+        self.assertTrue(conf["normalized_audio_insert_template"])
+        self.assertTrue(writes[-1]["normalized_audio_insert_template"])
+        self.assertEqual(len(applied), 1)
+        self.assertEqual(applied[0][0:4], (7, "Deck", {"notes": {1: {"mid": 2}}}, {"voice.mp3": "bac_norm_voice.m4a"}))
+        self.assertIs(applied[0][4], True)
+        self.assertIn(7, repaired)
 
     def test_analysis_is_blocked_while_normalized_audio_is_being_created(self) -> None:
         calls: list[str] = []
@@ -287,6 +354,9 @@ class PlaybackModeTests(unittest.TestCase):
         self.assertIn("level=false", SOURCE)
         self.assertIn("v010._start_analysis = _start_analysis_coordinated", SOURCE)
         self.assertIn("v010._clear_current_deck_profile = _clear_profile_coordinated", SOURCE)
+        self.assertIn('updated["normalized_audio_insert_template"] = True', SOURCE)
+        self.assertIn("native_generated", SOURCE)
+        self.assertIn("_ensure_materialized_card_integration", SOURCE)
 
 
 if __name__ == "__main__":

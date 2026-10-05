@@ -127,7 +127,9 @@ class AudioControllerV011PlaywrightTests(unittest.TestCase):
             self.assertFalse(any(message.startswith("ferreis_audio:set:normalize:") for message in messages))
             self.assertFalse(page.locator(".fac-normalize").is_checked())
             self.assertEqual(page.locator(".fac-mode-state").inner_text(), "Needs copies")
-            self.assertIn("bac_norm_", page.locator(".fac-playback-mode-hint").inner_text())
+            hint = page.locator(".fac-playback-mode-hint").inner_text()
+            self.assertIn("bac_norm_", hint)
+            self.assertIn("add-on is disabled", hint)
 
             page.evaluate(
                 "window.BACV010.updateState({playback_mode: 'profile', exists: false, stale: false})"

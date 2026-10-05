@@ -18,6 +18,7 @@ OVERVOLUME_FILTER_NAME = "@ferreis_overvolume"
 OVERVOLUME_DEFAULT_GAIN_DB = 6.0
 OVERVOLUME_MAX_GAIN_DB = 12.0
 OVERVOLUME_LIMIT_DB = -1.5
+_NATIVE_INTEGRATION_REPAIRED: set[int] = set()
 
 
 def _core():
@@ -96,7 +97,7 @@ def _local(lang: str, key: str, **values: Any) -> str:
             "mode_hint": "Choose exactly one normalization source. Real time works immediately; Analyzed profile needs deck analysis; Created audio needs analysis followed by generated copies.",
             "mode_profile_hint": "Uses the gain measured for each file when the deck was analyzed. If the profile is missing or outdated, no fallback normalization is applied.",
             "mode_realtime_hint": "Normalizes the original audio while it plays using the native MPV/FFmpeg loudnorm filter.",
-            "mode_created_hint": "Plays only normalized copies that belong to the current valid profile. Outdated or missing copies fall back to the original audio without runtime normalization.",
+            "mode_created_hint": "Uses normalized media files that are physically stored in Anki and referenced by the card. The generated audio remains usable even if the add-on is disabled.",
             "overvolume": "OverVolume",
             "overvolume_hint": "Adds extra playback gain after the selected normalization mode. Use it when audio is still too quiet at 100% volume. It never changes the media file.",
             "overvolume_gain": "OverVolume boost",
@@ -109,13 +110,13 @@ def _local(lang: str, key: str, **values: Any) -> str:
             "tab_analysis": "Analysis",
             "tab_created": "Created audio",
             "analysis_flow_hint": "Analysis prepares the data used by Analyzed profile and by normalized-copy generation. It is independent from Real-time playback.",
-            "created_flow_hint": "Recommended order: 1) Analyze deck, 2) Create normalized copies, 3) select Created audio as the playback mode. Creating copies also prepares the dedicated field and template when enabled.",
-            "prepare_optional_hint": "Optional: prepare the normalized-audio field and card template without generating physical audio files yet.",
+            "created_flow_hint": "Recommended order: 1) Analyze deck, 2) Create normalized copies, 3) select Created audio. Creating copies stores physical bac_norm_* media in Anki, writes native [sound:...] references to the dedicated field, and inserts that field into the card template so playback does not depend on the add-on staying enabled.",
+            "prepare_optional_hint": "Optional: prepare or repair the normalized-audio field and card template without generating new physical audio files.",
             "busy_materializing": "Wait for normalized-audio creation to finish before analyzing or clearing the profile.",
             "busy_analyzing": "Wait for deck analysis to finish before changing generated-audio data.",
             "status_profile_missing": "Analyzed-profile mode · no valid gain for this audio",
             "status_profile_stale": "Analyzed-profile mode · profile is outdated; reanalyze the deck",
-            "status_created_missing": "Created-audio mode · valid normalized copy not found; original audio is playing without runtime normalization",
+            "status_created_missing": "Created-audio mode · native normalized audio is not attached to this card; original audio is playing",
             "status_materialized_audio": "Already-normalized audio copy · normalization bypassed",
             "status_overvolume": "OverVolume {gain:+.1f} dB",
         },
@@ -127,7 +128,7 @@ def _local(lang: str, key: str, **values: Any) -> str:
             "mode_hint": "Escolha exatamente uma fonte de normalização. Em tempo real funciona imediatamente; Perfil analisado exige análise; Áudios criados exige análise seguida da geração das cópias.",
             "mode_profile_hint": "Usa o ganho medido para cada arquivo quando o deck foi analisado. Se o perfil estiver ausente ou desatualizado, não aplica normalização alternativa.",
             "mode_realtime_hint": "Normaliza o áudio original enquanto ele toca usando o filtro loudnorm do MPV/FFmpeg nativo.",
-            "mode_created_hint": "Reproduz somente cópias normalizadas pertencentes ao perfil atual e válido. Cópias ausentes ou desatualizadas fazem o original tocar sem normalização em tempo real.",
+            "mode_created_hint": "Usa arquivos de mídia normalizados gravados fisicamente no Anki e referenciados pelo card. O áudio gerado continua funcionando mesmo se o add-on for desativado.",
             "overvolume": "OverVolume",
             "overvolume_hint": "Adiciona ganho extra na reprodução depois do modo de normalização escolhido. Use quando o áudio continuar baixo mesmo em 100%. O arquivo de mídia nunca é alterado.",
             "overvolume_gain": "Ganho do OverVolume",
@@ -140,13 +141,13 @@ def _local(lang: str, key: str, **values: Any) -> str:
             "tab_analysis": "Análise",
             "tab_created": "Áudios criados",
             "analysis_flow_hint": "A análise prepara os dados usados pelo Perfil analisado e pela geração de cópias normalizadas. Ela é independente da reprodução Em tempo real.",
-            "created_flow_hint": "Ordem recomendada: 1) Analisar deck, 2) Criar cópias normalizadas, 3) selecionar Áudios criados no modo de reprodução. Criar cópias também prepara o campo dedicado e o template quando essa opção estiver ativa.",
-            "prepare_optional_hint": "Opcional: prepare o campo de áudio normalizado e o template do card sem gerar arquivos físicos de áudio ainda.",
+            "created_flow_hint": "Ordem recomendada: 1) Analisar deck, 2) Criar cópias normalizadas, 3) selecionar Áudios criados. A criação grava arquivos físicos bac_norm_* na mídia do Anki, escreve referências nativas [sound:...] no campo dedicado e insere esse campo no template do card, para a reprodução não depender do add-on continuar ativado.",
+            "prepare_optional_hint": "Opcional: prepare ou repare o campo de áudio normalizado e o template do card sem gerar novos arquivos físicos de áudio.",
             "busy_materializing": "Aguarde a criação dos áudios normalizados terminar antes de analisar ou limpar o perfil.",
             "busy_analyzing": "Aguarde a análise do deck terminar antes de alterar os dados de áudio gerado.",
             "status_profile_missing": "Modo perfil analisado · não há ganho válido para este áudio",
             "status_profile_stale": "Modo perfil analisado · perfil desatualizado; reanalise o deck",
-            "status_created_missing": "Modo áudios criados · cópia normalizada válida não encontrada; o original está tocando sem normalização em tempo real",
+            "status_created_missing": "Modo áudios criados · o áudio normalizado nativo não está vinculado a este card; o original está tocando",
             "status_materialized_audio": "Cópia de áudio já normalizada · normalização ignorada",
             "status_overvolume": "OverVolume {gain:+.1f} dB",
         },
@@ -204,6 +205,55 @@ def _available_materialized_mapping(deck_id: int | None) -> dict[str, str]:
     return result
 
 
+def _materialized_native_ready(deck_id: int, mapping: dict[str, str] | None = None) -> bool:
+    core = _core()
+    profile = core._get_deck_profile(deck_id)
+    if not isinstance(profile, dict):
+        return False
+    materialized = profile.get("materialized")
+    setup = profile.get("normalized_field_setup")
+    if not isinstance(materialized, dict) or not isinstance(setup, dict):
+        return False
+    if not bool(materialized.get("insert_template")) or not bool(setup.get("insert_template")):
+        return False
+    if int(setup.get("template_count", 0) or 0) <= 0:
+        return False
+    current_mapping = mapping if mapping is not None else _available_materialized_mapping(deck_id)
+    return bool(current_mapping)
+
+
+def _ensure_materialized_card_integration(context: object | None) -> bool:
+    current = v010._current_deck(context)
+    if not current:
+        return False
+    deck_id, deck_name = current
+    mapping = _available_materialized_mapping(deck_id)
+    if not mapping:
+        return False
+    profile = _core()._get_deck_profile(deck_id)
+    if not isinstance(profile, dict):
+        return False
+
+    conf = _conf()
+    if not bool(conf.get("normalized_audio_insert_template", True)):
+        conf["normalized_audio_insert_template"] = True
+        mw.addonManager.writeConfig(__package__, conf)
+
+    plan = v010._collect_materialization_plan(deck_id, profile)
+    if not plan.get("notes"):
+        return False
+    v010._apply_materialization(
+        deck_id,
+        deck_name,
+        plan,
+        mapping,
+        True,
+        profile,
+    )
+    _NATIVE_INTEGRATION_REPAIRED.add(deck_id)
+    return True
+
+
 def _selected_filename(filename: str, mode: str, mapping: dict[str, str]) -> str | None:
     core = _core()
     if mode == "created":
@@ -244,6 +294,12 @@ def _rewrite_playback_tags(tags: list[Any], deck_id: int | None) -> list[Any]:
     mode = _playback_mode()
     mapping = _available_materialized_mapping(deck_id) if mode == "created" else {}
     valid_generated = {str(name).casefold() for name in mapping.values()}
+    native_generated = {
+        str(tag.filename or "").casefold()
+        for tag in tags
+        if isinstance(tag, SoundOrVideoTag)
+        and core._is_materialized_audio(str(tag.filename or ""))
+    }
 
     rewritten: list[Any] = []
     seen_audio: set[str] = set()
@@ -256,12 +312,22 @@ def _rewrite_playback_tags(tags: list[Any], deck_id: int | None) -> list[Any]:
         if extension not in core.AUDIO_EXTENSIONS:
             rewritten.append(tag)
             continue
-        if mode == "created" and core._is_materialized_audio(filename):
-            if filename.casefold() not in valid_generated:
+
+        if mode == "created":
+            if core._is_materialized_audio(filename):
+                if filename.casefold() not in valid_generated:
+                    continue
+                selected = filename
+            else:
+                generated = mapping.get(filename)
+                if generated and generated.casefold() in native_generated:
+                    continue
+                selected = filename
+        else:
+            selected = _selected_filename(filename, mode, mapping)
+            if selected is None:
                 continue
-        selected = _selected_filename(filename, mode, mapping)
-        if selected is None:
-            continue
+
         key = selected.casefold()
         if key in seen_audio:
             continue
@@ -384,11 +450,12 @@ def _state(deck_id: int, deck_name: str | None = None) -> dict[str, Any]:
     state = _ORIGINAL_STATE(deck_id, deck_name)
     conf = _conf()
     mode = _playback_mode(conf)
+    mapping = _available_materialized_mapping(deck_id)
     state["playback_mode"] = mode
     state["enabled"] = mode == "profile"
     state["overvolume_enabled"] = bool(conf.get("overvolume_enabled", False))
     state["overvolume_gain_db"] = _overvolume_gain_db(conf)
-    state["created_ready"] = bool(_available_materialized_mapping(deck_id))
+    state["created_ready"] = _materialized_native_ready(deck_id, mapping)
     return state
 
 
@@ -606,7 +673,8 @@ def _open_settings_dialog(context: object | None = None) -> None:
     created_layout.addWidget(_description_label(_local(lang, "created_flow_hint"), created_tab))
     created_form = QFormLayout()
     insert_template = QCheckBox(t(lang, "insert_normalized_template"), created_tab)
-    insert_template.setChecked(bool(conf.get("normalized_audio_insert_template", True)))
+    insert_template.setChecked(True)
+    insert_template.setEnabled(False)
     add_row(
         created_form,
         created_tab,
@@ -648,7 +716,9 @@ def _open_settings_dialog(context: object | None = None) -> None:
         updated["dual_mono"] = bool(dual_mono.isChecked())
         selected_backend = str(backend.currentData() or "auto")
         updated["analysis_backend"] = selected_backend if selected_backend in {"auto", "ffmpeg", "webaudio"} else "auto"
-        updated["normalized_audio_insert_template"] = bool(insert_template.isChecked())
+        # Áudios criados são mídia persistente do Anki, portanto a integração
+        # nativa com campo/template é obrigatória e não pode depender do add-on.
+        updated["normalized_audio_insert_template"] = True
         mw.addonManager.writeConfig(__package__, updated)
 
         current_deck = v010._current_deck(action_context)
@@ -713,6 +783,8 @@ def _on_message(handled, message: str, context):
         if mode not in PLAYBACK_MODES:
             return (True, None)
         _save_playback_mode(mode)
+        if mode == "created":
+            _ensure_materialized_card_integration(context)
         _refresh_mode(context)
         return (True, None)
 
@@ -761,6 +833,12 @@ def _on_web_content(web_content: WebContent, context: object | None) -> None:
     core = _core()
     if not core._is_supported_card_context(context):
         return
+    current = v010._current_deck(context)
+    if current and _playback_mode() == "created" and current[0] not in _NATIVE_INTEGRATION_REPAIRED:
+        try:
+            _ensure_materialized_card_integration(context)
+        except Exception as exc:
+            print("[Balanced Audio Controller] unable to repair created-audio card integration:", exc)
     package = mw.addonManager.addonFromModule(__package__)
     web_content.js.append(f"/_addons/{package}/web/audio_controller_v011.js")
 
