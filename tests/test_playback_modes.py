@@ -213,22 +213,26 @@ class PlaybackModeTests(unittest.TestCase):
         self.assertEqual([id(tag) for tag in tags], original_ids)
         self.assertEqual([tag.filename for tag in rewritten], ["voice.mp3"])
 
-    def test_created_mode_deduplicates_only_current_generated_copy(self) -> None:
+    def test_created_mode_deduplicates_copy_and_keeps_unmapped_original(self) -> None:
         mapping = {"voice.mp3": "bac_norm_1234_voice.m4a"}
         rewrite = load_function("_rewrite_playback_tags", self._rewrite_namespace(mapping))
         tags = [
             FakeTag("voice.mp3"),
             FakeTag("bac_norm_1234_voice.m4a"),
             FakeTag("bac_norm_old_voice.m4a"),
+            FakeTag("other.mp3"),
         ]
 
         rewritten = rewrite(tags, 1)
 
         self.assertEqual(
             [tag.filename for tag in tags],
-            ["voice.mp3", "bac_norm_1234_voice.m4a", "bac_norm_old_voice.m4a"],
+            ["voice.mp3", "bac_norm_1234_voice.m4a", "bac_norm_old_voice.m4a", "other.mp3"],
         )
-        self.assertEqual([tag.filename for tag in rewritten], ["bac_norm_1234_voice.m4a"])
+        self.assertEqual(
+            [tag.filename for tag in rewritten],
+            ["bac_norm_1234_voice.m4a", "other.mp3"],
+        )
 
     def test_analysis_is_blocked_while_normalized_audio_is_being_created(self) -> None:
         calls: list[str] = []
