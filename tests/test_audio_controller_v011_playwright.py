@@ -81,6 +81,51 @@ class AudioControllerV011PlaywrightTests(unittest.TestCase):
         finally:
             page.close()
 
+    def test_overvolume_switch_gain_and_backend_state_sync(self) -> None:
+        page = self.page_with_config(base_config())
+        try:
+            enabled = page.locator(".fac-overvolume-enabled")
+            gain = page.locator(".fac-overvolume-gain")
+            value = page.locator(".fac-overvolume-value")
+
+            self.assertTrue(enabled.is_visible())
+            self.assertFalse(enabled.is_checked())
+            self.assertTrue(gain.is_disabled())
+            self.assertEqual(gain.input_value(), "6")
+            self.assertEqual(value.inner_text(), "+6.0 dB")
+            self.assertIn("still too quiet", page.locator(".fac-overvolume-hint").inner_text())
+
+            page.evaluate("window.__pycmdMessages=[]")
+            enabled.check()
+            self.assertIn(
+                "ferreis_audio:v011:overvolume:enabled:1",
+                page.evaluate("window.__pycmdMessages"),
+            )
+            self.assertFalse(gain.is_disabled())
+
+            page.evaluate(
+                """() => {
+                    const slider = document.querySelector('.fac-overvolume-gain');
+                    slider.value = '9.5';
+                    slider.dispatchEvent(new Event('input', { bubbles: true }));
+                }"""
+            )
+            self.assertIn(
+                "ferreis_audio:v011:overvolume:gain:9.5",
+                page.evaluate("window.__pycmdMessages"),
+            )
+            self.assertEqual(value.inner_text(), "+9.5 dB")
+
+            page.evaluate(
+                "window.BACV010.updateState({overvolume_enabled: false, overvolume_gain_db: 12})"
+            )
+            self.assertFalse(enabled.is_checked())
+            self.assertTrue(gain.is_disabled())
+            self.assertEqual(gain.input_value(), "12")
+            self.assertEqual(value.inner_text(), "+12.0 dB")
+        finally:
+            page.close()
+
     def test_mode_selector_is_rebound_after_front_back_render(self) -> None:
         config = base_config()
         config.update({"surface": "previewer", "side": "question"})
@@ -101,6 +146,7 @@ class AudioControllerV011PlaywrightTests(unittest.TestCase):
             )
             page.wait_for_selector(".fac-playback-mode-select")
             self.assertEqual(page.locator(".fac-playback-mode-select").count(), 1)
+            self.assertEqual(page.locator(".fac-overvolume-block").count(), 1)
             self.assertTrue(
                 page.evaluate(
                     "window.BACV011.root === document.getElementById('ferreis-audio-controller')"
