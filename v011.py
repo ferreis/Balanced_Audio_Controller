@@ -97,7 +97,7 @@ def _local(lang: str, key: str, **values: Any) -> str:
             "mode_hint": "Choose exactly one normalization source. Real time works immediately; Analyzed profile needs deck analysis; Created audio needs analysis followed by generated copies.",
             "mode_profile_hint": "Uses the gain measured for each file when the deck was analyzed. If the profile is missing or outdated, no fallback normalization is applied.",
             "mode_realtime_hint": "Normalizes the original audio while it plays using the native MPV/FFmpeg loudnorm filter.",
-            "mode_created_hint": "Uses normalized media files that are physically stored in Anki and referenced by the card. The generated audio remains usable even if the add-on is disabled.",
+            "mode_created_hint": "Keeps the original audio unchanged and adds a second native player for the physical normalized copy stored in Anki. Both remain available even if the add-on is disabled.",
             "overvolume": "OverVolume",
             "overvolume_hint": "Adds extra playback gain after the selected normalization mode. Use it when audio is still too quiet at 100% volume. It never changes the media file.",
             "overvolume_gain": "OverVolume boost",
@@ -110,7 +110,7 @@ def _local(lang: str, key: str, **values: Any) -> str:
             "tab_analysis": "Analysis",
             "tab_created": "Created audio",
             "analysis_flow_hint": "Analysis prepares the data used by Analyzed profile and by normalized-copy generation. It is independent from Real-time playback.",
-            "created_flow_hint": "Recommended order: 1) Analyze deck, 2) Create normalized copies, 3) select Created audio. Creating copies stores physical bac_norm_* media in Anki, writes native [sound:...] references to the dedicated field, and inserts that field into the card template so playback does not depend on the add-on staying enabled.",
+            "created_flow_hint": "Recommended order: 1) Analyze deck, 2) Create normalized copies, 3) select Created audio. Creating copies never replaces or deletes the original audio. It stores physical bac_norm_* media in Anki, writes native [sound:...] references to a dedicated field, and inserts that field into the card template as an additional player.",
             "prepare_optional_hint": "Optional: prepare or repair the normalized-audio field and card template without generating new physical audio files.",
             "busy_materializing": "Wait for normalized-audio creation to finish before analyzing or clearing the profile.",
             "busy_analyzing": "Wait for deck analysis to finish before changing generated-audio data.",
@@ -128,7 +128,7 @@ def _local(lang: str, key: str, **values: Any) -> str:
             "mode_hint": "Escolha exatamente uma fonte de normalização. Em tempo real funciona imediatamente; Perfil analisado exige análise; Áudios criados exige análise seguida da geração das cópias.",
             "mode_profile_hint": "Usa o ganho medido para cada arquivo quando o deck foi analisado. Se o perfil estiver ausente ou desatualizado, não aplica normalização alternativa.",
             "mode_realtime_hint": "Normaliza o áudio original enquanto ele toca usando o filtro loudnorm do MPV/FFmpeg nativo.",
-            "mode_created_hint": "Usa arquivos de mídia normalizados gravados fisicamente no Anki e referenciados pelo card. O áudio gerado continua funcionando mesmo se o add-on for desativado.",
+            "mode_created_hint": "Mantém o áudio original intacto e adiciona um segundo player nativo para a cópia normalizada física gravada no Anki. Os dois continuam disponíveis mesmo se o add-on for desativado.",
             "overvolume": "OverVolume",
             "overvolume_hint": "Adiciona ganho extra na reprodução depois do modo de normalização escolhido. Use quando o áudio continuar baixo mesmo em 100%. O arquivo de mídia nunca é alterado.",
             "overvolume_gain": "Ganho do OverVolume",
@@ -141,7 +141,7 @@ def _local(lang: str, key: str, **values: Any) -> str:
             "tab_analysis": "Análise",
             "tab_created": "Áudios criados",
             "analysis_flow_hint": "A análise prepara os dados usados pelo Perfil analisado e pela geração de cópias normalizadas. Ela é independente da reprodução Em tempo real.",
-            "created_flow_hint": "Ordem recomendada: 1) Analisar deck, 2) Criar cópias normalizadas, 3) selecionar Áudios criados. A criação grava arquivos físicos bac_norm_* na mídia do Anki, escreve referências nativas [sound:...] no campo dedicado e insere esse campo no template do card, para a reprodução não depender do add-on continuar ativado.",
+            "created_flow_hint": "Ordem recomendada: 1) Analisar deck, 2) Criar cópias normalizadas, 3) selecionar Áudios criados. Criar cópias nunca substitui nem apaga o áudio original. O add-on grava a mídia física bac_norm_* no Anki, escreve [sound:...] em um campo dedicado e insere esse campo no template do card como um player adicional.",
             "prepare_optional_hint": "Opcional: prepare ou repare o campo de áudio normalizado e o template do card sem gerar novos arquivos físicos de áudio.",
             "busy_materializing": "Aguarde a criação dos áudios normalizados terminar antes de analisar ou limpar o perfil.",
             "busy_analyzing": "Aguarde a análise do deck terminar antes de alterar os dados de áudio gerado.",
@@ -255,13 +255,9 @@ def _ensure_materialized_card_integration(context: object | None) -> bool:
 
 
 def _selected_filename(filename: str, mode: str, mapping: dict[str, str]) -> str | None:
-    core = _core()
-    if mode == "created":
-        if core._is_materialized_audio(filename):
-            return _safe_generated_filename(filename)
-        return mapping.get(filename) or filename
-    if core._is_materialized_audio(filename):
-        return None
+    # Áudios criados são um segundo player nativo do card. Nenhum modo pode
+    # substituir o original ou esconder a cópia que já está no HTML do Anki.
+    del mode, mapping
     return filename
 
 
@@ -287,53 +283,11 @@ def _current_playback_deck_id() -> int | None:
 
 
 def _rewrite_playback_tags(tags: list[Any], deck_id: int | None) -> list[Any]:
-    core = _core()
-    if deck_id is None:
-        return list(tags)
-
-    mode = _playback_mode()
-    mapping = _available_materialized_mapping(deck_id) if mode == "created" else {}
-    valid_generated = {str(name).casefold() for name in mapping.values()}
-    native_generated = {
-        str(tag.filename or "").casefold()
-        for tag in tags
-        if isinstance(tag, SoundOrVideoTag)
-        and core._is_materialized_audio(str(tag.filename or ""))
-    }
-
-    rewritten: list[Any] = []
-    seen_audio: set[str] = set()
-    for tag in tags:
-        if not isinstance(tag, SoundOrVideoTag):
-            rewritten.append(tag)
-            continue
-        filename = str(tag.filename or "")
-        extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-        if extension not in core.AUDIO_EXTENSIONS:
-            rewritten.append(tag)
-            continue
-
-        if mode == "created":
-            if core._is_materialized_audio(filename):
-                if filename.casefold() not in valid_generated:
-                    continue
-                selected = filename
-            else:
-                generated = mapping.get(filename)
-                if generated and generated.casefold() in native_generated:
-                    continue
-                selected = filename
-        else:
-            selected = _selected_filename(filename, mode, mapping)
-            if selected is None:
-                continue
-
-        key = selected.casefold()
-        if key in seen_audio:
-            continue
-        seen_audio.add(key)
-        rewritten.append(tag if selected == filename else _copy_sound_tag(tag, selected))
-    return rewritten
+    # O HTML/template do card é a fonte de verdade. Se ele contém o player do
+    # original e o player da cópia bac_norm_*, ambos precisam chegar intactos
+    # ao player nativo. O add-on não substitui, remove ou injeta tags de áudio.
+    del deck_id
+    return list(tags)
 
 
 _ORIGINAL_PLAY_TAGS = getattr(
@@ -343,9 +297,8 @@ _ORIGINAL_PLAY_TAGS = getattr(
 
 def _play_tags_without_mutating_render_cache(tags: list[Any]) -> None:
     # Card.question_av_tags()/answer_av_tags() retornam a lista mantida dentro do
-    # render_output cacheado pelo Anki. Alterar essa lista quebra os índices
-    # play:q:N/play:a:N já inseridos no HTML e causa IndexError no replay manual.
-    # Transformamos uma cópia somente na fronteira do player nativo.
+    # render_output cacheado pelo Anki. Nunca alteramos essa lista nem sua ordem,
+    # preservando os índices play:q:N/play:a:N e os dois players nativos.
     rewritten = _rewrite_playback_tags(list(tags), _current_playback_deck_id())
     _ORIGINAL_PLAY_TAGS(rewritten)
 
