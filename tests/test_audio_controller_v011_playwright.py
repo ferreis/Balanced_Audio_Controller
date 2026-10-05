@@ -64,7 +64,7 @@ class AudioControllerV011PlaywrightTests(unittest.TestCase):
             self.assertEqual(page.locator(".fac-ui-group").count(), 3)
             self.assertEqual(
                 page.locator(".fac-ui-group-title").all_inner_texts(),
-                ["Playback", "Normalization", "Deck"],
+                ["PLAYBACK", "NORMALIZATION", "DECK"],
             )
             self.assertTrue(page.locator(".fac-playback-group .fac-speed").is_visible())
             self.assertTrue(page.locator(".fac-playback-group .fac-volume").is_visible())
