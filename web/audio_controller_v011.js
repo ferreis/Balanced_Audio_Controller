@@ -13,28 +13,42 @@
     text(key) {
       const dictionary = {
         en: {
+          group_playback: "Playback",
+          group_processing: "Normalization",
+          group_deck: "Deck",
           title: "Playback mode",
           profile: "Analyzed profile",
           realtime: "Real time",
           created: "Created audio",
-          hint_profile: "Uses the gain measured for each audio file in the analyzed deck profile.",
-          hint_realtime: "Normalizes the original audio while it plays.",
-          hint_created: "Uses the generated normalized copy and avoids applying normalization twice.",
+          hint_profile: "Uses the gain measured for each audio file. Run Analyze deck again after changing the target loudness.",
+          hint_realtime: "Normalizes the original audio while it plays. No deck analysis is required.",
+          hint_created: "Uses bac_norm_* copies. Analyze the deck and create normalized copies in Settings before using this mode.",
+          state_ready: "Ready",
+          state_instant: "Immediate",
+          state_needs_analysis: "Needs analysis",
+          state_needs_copies: "Needs copies",
           overvolume: "OverVolume",
           overvolume_gain: "Extra gain",
-          overvolume_hint: "Use when audio is still too quiet at 100%. Adds playback-only gain after normalization and uses a limiter to reduce clipping.",
+          overvolume_hint: "Optional playback boost after the selected mode. Use it only when 100% volume is still too quiet.",
         },
         "pt-BR": {
+          group_playback: "Reprodução",
+          group_processing: "Normalização",
+          group_deck: "Deck",
           title: "Modo de reprodução",
           profile: "Perfil analisado",
           realtime: "Em tempo real",
           created: "Áudios criados",
-          hint_profile: "Usa o ganho medido para cada arquivo no perfil analisado do deck.",
-          hint_realtime: "Normaliza o áudio original enquanto ele toca.",
-          hint_created: "Usa a cópia normalizada gerada e evita aplicar normalização duas vezes.",
+          hint_profile: "Usa o ganho medido para cada arquivo. Reanalise o deck depois de alterar o loudness alvo.",
+          hint_realtime: "Normaliza o áudio original enquanto ele toca. Não exige análise prévia do deck.",
+          hint_created: "Usa as cópias bac_norm_*. Analise o deck e crie as cópias normalizadas em Configurações antes de usar este modo.",
+          state_ready: "Pronto",
+          state_instant: "Imediato",
+          state_needs_analysis: "Precisa analisar",
+          state_needs_copies: "Precisa gerar",
           overvolume: "OverVolume",
           overvolume_gain: "Ganho extra",
-          overvolume_hint: "Use quando o áudio continuar baixo mesmo em 100%. Adiciona ganho somente na reprodução depois da normalização e usa um limitador para reduzir clipping.",
+          overvolume_hint: "Boost opcional aplicado depois do modo escolhido. Use apenas quando 100% de volume ainda estiver baixo.",
         },
       };
       return dictionary[this.language()][key] || key;
@@ -54,28 +68,79 @@
       const style = document.createElement("style");
       style.id = "fac-v011-styles";
       style.textContent = `
-        #ferreis-audio-controller .fac-playback-mode-select {
-          box-sizing: border-box;
-          width: 100%;
-          min-height: 32px;
-          padding: 5px 7px;
-          border: 1px solid var(--fac-border);
-          border-radius: 6px;
-          background: var(--fac-bg-soft);
-          color: var(--fac-text);
-          font: inherit;
+        #ferreis-audio-controller .fac-side-panel {
+          width: 246px;
         }
-        #ferreis-audio-controller .fac-playback-mode-hint,
-        #ferreis-audio-controller .fac-overvolume-hint {
+        #ferreis-audio-controller .fac-side-body {
+          gap: 8px;
+          padding: 9px;
+        }
+        #ferreis-audio-controller .fac-ui-group {
+          overflow: hidden;
+          border: 1px solid var(--fac-divider);
+          border-radius: 9px;
+          background: rgba(255, 255, 255, 0.025);
+        }
+        #ferreis-audio-controller .fac-ui-group-title {
+          padding: 7px 9px;
+          border-bottom: 1px solid var(--fac-divider);
+          background: rgba(255, 255, 255, 0.035);
           color: var(--fac-muted);
-          font-size: 11px;
-          line-height: 1.35;
+          font-size: 10px;
+          font-weight: 600;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
         }
+        #ferreis-audio-controller .fac-ui-group > .fac-block {
+          padding: 9px;
+          border-bottom: 1px solid var(--fac-divider);
+        }
+        #ferreis-audio-controller .fac-ui-group > .fac-block:last-child {
+          border-bottom: 0;
+        }
+        #ferreis-audio-controller .fac-playback-mode-head,
         #ferreis-audio-controller .fac-overvolume-head {
           display: flex;
           align-items: center;
           justify-content: space-between;
           gap: 8px;
+        }
+        #ferreis-audio-controller .fac-playback-mode-select {
+          box-sizing: border-box;
+          width: 100%;
+          min-height: 34px;
+          padding: 5px 8px;
+          border: 1px solid var(--fac-border);
+          border-radius: 7px;
+          background: var(--fac-bg-soft);
+          color: var(--fac-text);
+          font: inherit;
+        }
+        #ferreis-audio-controller .fac-mode-state {
+          max-width: 92px;
+          padding: 2px 6px;
+          overflow: hidden;
+          border: 1px solid var(--fac-border);
+          border-radius: 999px;
+          color: var(--fac-muted);
+          font-size: 9px;
+          line-height: 1.2;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        #ferreis-audio-controller .fac-mode-state.fac-state-ok {
+          border-color: rgba(115, 201, 145, 0.45);
+          color: var(--fac-success);
+        }
+        #ferreis-audio-controller .fac-mode-state.fac-state-warn {
+          border-color: rgba(229, 192, 123, 0.45);
+          color: var(--fac-warning);
+        }
+        #ferreis-audio-controller .fac-playback-mode-hint,
+        #ferreis-audio-controller .fac-overvolume-hint {
+          color: var(--fac-muted);
+          font-size: 10px;
+          line-height: 1.4;
         }
         #ferreis-audio-controller .fac-overvolume-value {
           color: var(--fac-text);
@@ -84,6 +149,22 @@
         }
         #ferreis-audio-controller .fac-overvolume-gain:disabled {
           opacity: 0.4;
+        }
+        #ferreis-audio-controller .fac-normalization-block[hidden] {
+          display: none !important;
+        }
+        #ferreis-audio-controller .fac-status {
+          display: block;
+          margin: 1px 2px 0;
+          padding: 6px 7px;
+          overflow: hidden;
+          border-radius: 6px;
+          background: rgba(0, 0, 0, 0.10);
+          color: var(--fac-muted);
+          font-size: 9px;
+          line-height: 1.3;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
       `;
       document.head.appendChild(style);
@@ -168,7 +249,10 @@
       const section = document.createElement("section");
       section.className = "fac-block fac-playback-mode-block";
       section.innerHTML = `
-        <div class="fac-row fac-row-label"><span>${this.text("title")}</span></div>
+        <div class="fac-playback-mode-head">
+          <div class="fac-row fac-row-label"><span>${this.text("title")}</span></div>
+          <span class="fac-mode-state"></span>
+        </div>
         <select class="fac-playback-mode-select" aria-label="${this.text("title")}">
           <option value="profile">${this.text("profile")}</option>
           <option value="realtime">${this.text("realtime")}</option>
@@ -187,6 +271,24 @@
       });
     },
 
+    modeReadiness(mode) {
+      if (mode === "realtime") {
+        return { text: this.text("state_instant"), className: "fac-state-ok" };
+      }
+      if (mode === "profile") {
+        const ready = Boolean(this.state.exists) && !Boolean(this.state.stale);
+        return {
+          text: this.text(ready ? "state_ready" : "state_needs_analysis"),
+          className: ready ? "fac-state-ok" : "fac-state-warn",
+        };
+      }
+      const ready = Boolean(this.state.created_ready);
+      return {
+        text: this.text(ready ? "state_ready" : "state_needs_copies"),
+        className: ready ? "fac-state-ok" : "fac-state-warn",
+      };
+    },
+
     syncMode() {
       if (!this.root) return;
       const mode = this.inferMode();
@@ -194,6 +296,15 @@
       if (select && select.value !== mode) select.value = mode;
       const hint = this.root.querySelector(".fac-playback-mode-hint");
       if (hint) hint.textContent = this.text(`hint_${mode}`);
+
+      const stateBadge = this.root.querySelector(".fac-mode-state");
+      if (stateBadge) {
+        const readiness = this.modeReadiness(mode);
+        stateBadge.classList.remove("fac-state-ok", "fac-state-warn");
+        stateBadge.classList.add(readiness.className);
+        stateBadge.textContent = readiness.text;
+        stateBadge.title = readiness.text;
+      }
 
       const normalize = this.root.querySelector(".fac-normalize");
       if (normalize) normalize.checked = mode === "realtime";
@@ -205,6 +316,58 @@
       }
     },
 
+    makeGroup(className, title, blocks, anchor) {
+      if (!this.root || !anchor?.parentNode || this.root.querySelector(`.${className}`)) return;
+      const group = document.createElement("div");
+      group.className = `fac-ui-group ${className}`;
+      const heading = document.createElement("div");
+      heading.className = "fac-ui-group-title";
+      heading.textContent = title;
+      group.appendChild(heading);
+      anchor.parentNode.insertBefore(group, anchor);
+      for (const block of blocks) {
+        if (block) group.appendChild(block);
+      }
+    },
+
+    organizePanel() {
+      if (!this.root) return;
+      const speed = this.root.querySelector(".fac-speed")?.closest(".fac-block");
+      const volume = this.root.querySelector(".fac-volume")?.closest(".fac-block");
+      const mode = this.root.querySelector(".fac-playback-mode-block");
+      const overvolume = this.root.querySelector(".fac-overvolume-block");
+      const deck = this.root.querySelector(".fac-deck-profile-block");
+      const legacyNormalize = this.root.querySelector(".fac-normalization-block");
+
+      if (legacyNormalize) {
+        legacyNormalize.hidden = true;
+        legacyNormalize.setAttribute("aria-hidden", "true");
+      }
+
+      if (speed && volume) {
+        this.makeGroup("fac-playback-group", this.text("group_playback"), [speed, volume], speed);
+      }
+      if (mode) {
+        this.makeGroup(
+          "fac-processing-group",
+          this.text("group_processing"),
+          [mode, overvolume],
+          mode
+        );
+      }
+      if (deck) {
+        this.makeGroup("fac-deck-group", this.text("group_deck"), [deck], deck);
+      }
+    },
+
+    syncBusyState() {
+      if (!this.root) return;
+      const analyze = this.root.querySelector(".fac-analyze-deck");
+      if (analyze) {
+        analyze.disabled = Boolean(this.state.analyzing || this.state.materializing);
+      }
+    },
+
     attach(root) {
       if (!root) return;
       this.root = root;
@@ -212,14 +375,17 @@
       this.installStyles();
       this.installOverVolume();
       this.installModeSelector();
+      this.organizePanel();
       this.syncOverVolume();
       this.syncMode();
+      this.syncBusyState();
     },
 
     updateState(state) {
       this.state = { ...this.state, ...(state || {}) };
       this.syncOverVolume();
       this.syncMode();
+      this.syncBusyState();
     },
 
     patchV010() {
