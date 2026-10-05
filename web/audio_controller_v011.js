@@ -112,9 +112,16 @@
           padding: 5px 8px;
           border: 1px solid var(--fac-border);
           border-radius: 7px;
-          background: var(--fac-bg-soft);
-          color: var(--fac-text);
+          background-color: rgb(31, 34, 40);
+          color: var(--fac-text, #e8e9ec);
+          -webkit-text-fill-color: var(--fac-text, #e8e9ec);
+          color-scheme: dark;
           font: inherit;
+        }
+        #ferreis-audio-controller .fac-playback-mode-select option {
+          background-color: rgb(31, 34, 40);
+          color: #e8e9ec;
+          -webkit-text-fill-color: #e8e9ec;
         }
         #ferreis-audio-controller .fac-mode-state {
           max-width: 92px;
