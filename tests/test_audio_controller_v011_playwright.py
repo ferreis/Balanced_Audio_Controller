@@ -129,6 +129,8 @@ class AudioControllerV011PlaywrightTests(unittest.TestCase):
             self.assertEqual(page.locator(".fac-mode-state").inner_text(), "Needs copies")
             hint = page.locator(".fac-playback-mode-hint").inner_text()
             self.assertIn("bac_norm_", hint)
+            self.assertIn("original player", hint)
+            self.assertIn("second native player", hint)
             self.assertIn("add-on is disabled", hint)
 
             page.evaluate(
