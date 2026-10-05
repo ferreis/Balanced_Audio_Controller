@@ -14,6 +14,10 @@ from .i18n import t
 from . import v010
 
 PLAYBACK_MODES = {"profile", "realtime", "created"}
+OVERVOLUME_FILTER_NAME = "@ferreis_overvolume"
+OVERVOLUME_DEFAULT_GAIN_DB = 6.0
+OVERVOLUME_MAX_GAIN_DB = 12.0
+OVERVOLUME_LIMIT_DB = -1.5
 
 
 def _core():
@@ -48,6 +52,40 @@ def _save_playback_mode(mode: str) -> str:
     return normalized
 
 
+def _overvolume_gain_db(conf: dict[str, Any] | None = None) -> float:
+    current = conf if conf is not None else _conf()
+    try:
+        value = float(current.get("overvolume_gain_db", OVERVOLUME_DEFAULT_GAIN_DB))
+    except (TypeError, ValueError):
+        value = OVERVOLUME_DEFAULT_GAIN_DB
+    return max(0.0, min(OVERVOLUME_MAX_GAIN_DB, value))
+
+
+def _overvolume_filter(conf: dict[str, Any]) -> str:
+    gain_db = _overvolume_gain_db(conf)
+    limit = 10.0 ** (OVERVOLUME_LIMIT_DB / 20.0)
+    return (
+        f"{OVERVOLUME_FILTER_NAME}:lavfi=["
+        f"volume={gain_db:.3f}dB,"
+        f"alimiter=limit={limit:.6f}:level=false"
+        f"]"
+    )
+
+
+def _apply_overvolume(player: Any, conf: dict[str, Any]) -> tuple[bool, float]:
+    core = _core()
+    core._remove_filter(player, OVERVOLUME_FILTER_NAME)
+    gain_db = _overvolume_gain_db(conf)
+    if not bool(conf.get("overvolume_enabled", False)) or gain_db <= 0.0:
+        return False, gain_db
+    try:
+        player.command("af", "add", _overvolume_filter(conf))
+        return True, gain_db
+    except Exception as exc:
+        print("[Balanced Audio Controller] OverVolume unavailable:", exc)
+        return False, gain_db
+
+
 def _local(lang: str, key: str, **values: Any) -> str:
     messages = {
         "en": {
@@ -55,34 +93,62 @@ def _local(lang: str, key: str, **values: Any) -> str:
             "mode_profile": "Analyzed profile",
             "mode_realtime": "Real time",
             "mode_created": "Created audio",
-            "mode_hint": "Choose one source of normalization: analyzed gain, real-time loudnorm, or the normalized audio copies created by the add-on.",
+            "mode_hint": "Choose exactly one normalization source. Real time works immediately; Analyzed profile needs deck analysis; Created audio needs analysis followed by generated copies.",
             "mode_profile_hint": "Uses the gain measured for each file when the deck was analyzed. If the profile is missing or outdated, no fallback normalization is applied.",
             "mode_realtime_hint": "Normalizes the original audio while it plays using the native MPV/FFmpeg loudnorm filter.",
-            "mode_created_hint": "Plays the generated bac_norm_* copy when available, removes duplicate generated tags and does not normalize it again.",
+            "mode_created_hint": "Plays only normalized copies that belong to the current valid profile. Outdated or missing copies fall back to the original audio without runtime normalization.",
+            "overvolume": "OverVolume",
+            "overvolume_hint": "Adds extra playback gain after the selected normalization mode. Use it when audio is still too quiet at 100% volume. It never changes the media file.",
+            "overvolume_gain": "OverVolume boost",
+            "overvolume_gain_hint": "Extra gain from 0 to +12 dB. A limiter is applied afterward to reduce digital clipping; high values can make noise or existing distortion more audible.",
             "language_hint": "Automatic follows the computer language; unsupported languages use English.",
             "analysis_hint": "Automatic prefers FFmpeg and falls back to the built-in analyzer. FFmpeg is more accurate; the built-in analyzer needs no external executable.",
-            "analyze_hint": "Measures the current deck and stores a per-file normalization profile.",
+            "analyze_hint": "Measures the current deck and stores a per-file normalization profile. Analysis does not change the selected playback mode.",
             "clear_hint": "Deletes only the analyzed profile for the current deck. Original media files are not removed.",
+            "tab_playback": "Playback",
+            "tab_analysis": "Analysis",
+            "tab_created": "Created audio",
+            "analysis_flow_hint": "Analysis prepares the data used by Analyzed profile and by normalized-copy generation. It is independent from Real-time playback.",
+            "created_flow_hint": "Recommended order: 1) Analyze deck, 2) Create normalized copies, 3) select Created audio as the playback mode. Creating copies also prepares the dedicated field and template when enabled.",
+            "prepare_optional_hint": "Optional: prepare the normalized-audio field and card template without generating physical audio files yet.",
+            "busy_materializing": "Wait for normalized-audio creation to finish before analyzing or clearing the profile.",
+            "busy_analyzing": "Wait for deck analysis to finish before changing generated-audio data.",
             "status_profile_missing": "Analyzed-profile mode · no valid gain for this audio",
             "status_profile_stale": "Analyzed-profile mode · profile is outdated; reanalyze the deck",
-            "status_created_missing": "Created-audio mode · normalized copy not found; original audio is playing without runtime normalization",
+            "status_created_missing": "Created-audio mode · valid normalized copy not found; original audio is playing without runtime normalization",
+            "status_materialized_audio": "Already-normalized audio copy · normalization bypassed",
+            "status_overvolume": "OverVolume {gain:+.1f} dB",
         },
         "pt-BR": {
             "playback_mode": "Modo de reprodução",
             "mode_profile": "Perfil analisado",
             "mode_realtime": "Em tempo real",
             "mode_created": "Áudios criados",
-            "mode_hint": "Escolha uma única fonte de normalização: ganho do perfil analisado, loudnorm em tempo real ou as cópias normalizadas criadas pelo add-on.",
+            "mode_hint": "Escolha exatamente uma fonte de normalização. Em tempo real funciona imediatamente; Perfil analisado exige análise; Áudios criados exige análise seguida da geração das cópias.",
             "mode_profile_hint": "Usa o ganho medido para cada arquivo quando o deck foi analisado. Se o perfil estiver ausente ou desatualizado, não aplica normalização alternativa.",
             "mode_realtime_hint": "Normaliza o áudio original enquanto ele toca usando o filtro loudnorm do MPV/FFmpeg nativo.",
-            "mode_created_hint": "Reproduz a cópia bac_norm_* quando existir, remove tags geradas duplicadas e não normaliza essa cópia novamente.",
+            "mode_created_hint": "Reproduz somente cópias normalizadas pertencentes ao perfil atual e válido. Cópias ausentes ou desatualizadas fazem o original tocar sem normalização em tempo real.",
+            "overvolume": "OverVolume",
+            "overvolume_hint": "Adiciona ganho extra na reprodução depois do modo de normalização escolhido. Use quando o áudio continuar baixo mesmo em 100%. O arquivo de mídia nunca é alterado.",
+            "overvolume_gain": "Ganho do OverVolume",
+            "overvolume_gain_hint": "Ganho extra de 0 a +12 dB. Um limitador é aplicado depois para reduzir clipping digital; valores altos podem deixar ruído ou distorções existentes mais perceptíveis.",
             "language_hint": "Automático segue o idioma do computador; idiomas não suportados usam inglês.",
             "analysis_hint": "Automático prefere FFmpeg e usa o analisador interno como fallback. FFmpeg é mais preciso; o analisador interno não exige executável externo.",
-            "analyze_hint": "Mede os áudios do deck atual e salva um perfil de normalização por arquivo.",
+            "analyze_hint": "Mede os áudios do deck atual e salva um perfil de normalização por arquivo. A análise não altera o modo de reprodução selecionado.",
             "clear_hint": "Exclui somente o perfil analisado do deck atual. Os arquivos de mídia originais não são removidos.",
+            "tab_playback": "Reprodução",
+            "tab_analysis": "Análise",
+            "tab_created": "Áudios criados",
+            "analysis_flow_hint": "A análise prepara os dados usados pelo Perfil analisado e pela geração de cópias normalizadas. Ela é independente da reprodução Em tempo real.",
+            "created_flow_hint": "Ordem recomendada: 1) Analisar deck, 2) Criar cópias normalizadas, 3) selecionar Áudios criados no modo de reprodução. Criar cópias também prepara o campo dedicado e o template quando essa opção estiver ativa.",
+            "prepare_optional_hint": "Opcional: prepare o campo de áudio normalizado e o template do card sem gerar arquivos físicos de áudio ainda.",
+            "busy_materializing": "Aguarde a criação dos áudios normalizados terminar antes de analisar ou limpar o perfil.",
+            "busy_analyzing": "Aguarde a análise do deck terminar antes de alterar os dados de áudio gerado.",
             "status_profile_missing": "Modo perfil analisado · não há ganho válido para este áudio",
             "status_profile_stale": "Modo perfil analisado · perfil desatualizado; reanalise o deck",
-            "status_created_missing": "Modo áudios criados · cópia normalizada não encontrada; o original está tocando sem normalização em tempo real",
+            "status_created_missing": "Modo áudios criados · cópia normalizada válida não encontrada; o original está tocando sem normalização em tempo real",
+            "status_materialized_audio": "Cópia de áudio já normalizada · normalização ignorada",
+            "status_overvolume": "OverVolume {gain:+.1f} dB",
         },
     }
     language = "pt-BR" if lang == "pt-BR" else "en"
@@ -108,7 +174,7 @@ def _available_materialized_mapping(deck_id: int | None) -> dict[str, str]:
         return {}
     core = _core()
     profile = core._get_deck_profile(deck_id)
-    if not isinstance(profile, dict):
+    if not isinstance(profile, dict) or not core._profile_matches_config(profile, _conf()):
         return {}
     materialized = profile.get("materialized")
     if not isinstance(materialized, dict):
@@ -177,17 +243,7 @@ def _rewrite_playback_tags(tags: list[Any], deck_id: int | None) -> list[Any]:
 
     mode = _playback_mode()
     mapping = _available_materialized_mapping(deck_id) if mode == "created" else {}
-
-    generated_present = False
-    if mode == "created":
-        for candidate_tag in tags:
-            if not isinstance(candidate_tag, SoundOrVideoTag):
-                continue
-            candidate_name = str(candidate_tag.filename or "")
-            candidate_ext = candidate_name.rsplit(".", 1)[-1].lower() if "." in candidate_name else ""
-            if candidate_ext in core.AUDIO_EXTENSIONS and _safe_generated_filename(candidate_name):
-                generated_present = True
-                break
+    valid_generated = {str(name).casefold() for name in mapping.values()}
 
     rewritten: list[Any] = []
     seen_audio: set[str] = set()
@@ -200,13 +256,9 @@ def _rewrite_playback_tags(tags: list[Any], deck_id: int | None) -> list[Any]:
         if extension not in core.AUDIO_EXTENSIONS:
             rewritten.append(tag)
             continue
-        if (
-            mode == "created"
-            and generated_present
-            and not core._is_materialized_audio(filename)
-            and filename not in mapping
-        ):
-            continue
+        if mode == "created" and core._is_materialized_audio(filename):
+            if filename.casefold() not in valid_generated:
+                continue
         selected = _selected_filename(filename, mode, mapping)
         if selected is None:
             continue
@@ -283,9 +335,16 @@ def _apply_native_settings(
 
     core._remove_filter(player, core.NORMALIZE_FILTER_NAME)
     core._remove_filter(player, core.DECK_GAIN_FILTER_NAME)
+    core._remove_filter(player, OVERVOLUME_FILTER_NAME)
+
+    def finish(status: str) -> tuple[bool, str]:
+        applied, gain_db = _apply_overvolume(player, conf)
+        if applied:
+            status = f"{status} · {_local(lang, 'status_overvolume', gain=gain_db)}"
+        return True, status
 
     if core._is_materialized_audio(filename):
-        return True, t(lang, "status_materialized_audio")
+        return finish(_local(lang, "status_materialized_audio"))
 
     mode = _playback_mode(conf)
     if mode == "profile":
@@ -294,33 +353,77 @@ def _apply_native_settings(
             try:
                 gain_db = float(entry.get("gain_db", 0.0))
                 player.command("af", "add", core._deck_gain_filter(gain_db))
-                return True, t(lang, "status_deck_profile_gain", gain=gain_db)
+                return finish(t(lang, "status_deck_profile_gain", gain=gain_db))
             except Exception as exc:
                 print("[Balanced Audio Controller] unable to apply deck gain:", exc)
         if profile and not core._profile_matches_config(profile, conf):
-            return True, _local(lang, "status_profile_stale")
-        return True, _local(lang, "status_profile_missing")
+            return finish(_local(lang, "status_profile_stale"))
+        return finish(_local(lang, "status_profile_missing"))
 
     if mode == "realtime":
         try:
             player.command("af", "add", core._normalizer_filter(conf))
-            return True, t(lang, "status_realtime_normalization", prefix="", target=target)
+            return finish(t(lang, "status_realtime_normalization", prefix="", target=target))
         except Exception as exc:
             print("[Balanced Audio Controller] loudnorm unavailable:", exc)
-            return True, t(lang, "status_loudnorm_unavailable", prefix="")
+            return finish(t(lang, "status_loudnorm_unavailable", prefix=""))
 
-    return True, _local(lang, "status_created_missing")
+    return finish(_local(lang, "status_created_missing"))
 
 
 _ORIGINAL_STATE = v010._state
+_ORIGINAL_START_ANALYSIS = getattr(
+    v010, "_bac_v011_original_start_analysis", v010._start_analysis
+)
+_ORIGINAL_CLEAR_PROFILE = getattr(
+    v010, "_bac_v011_original_clear_profile", v010._clear_current_deck_profile
+)
 
 
 def _state(deck_id: int, deck_name: str | None = None) -> dict[str, Any]:
     state = _ORIGINAL_STATE(deck_id, deck_name)
-    mode = _playback_mode()
+    conf = _conf()
+    mode = _playback_mode(conf)
     state["playback_mode"] = mode
     state["enabled"] = mode == "profile"
+    state["overvolume_enabled"] = bool(conf.get("overvolume_enabled", False))
+    state["overvolume_gain_db"] = _overvolume_gain_db(conf)
+    state["created_ready"] = bool(_available_materialized_mapping(deck_id))
     return state
+
+
+def _deck_is_materializing(deck_id: int, deck_name: str | None = None) -> bool:
+    return bool(_ORIGINAL_STATE(deck_id, deck_name).get("materializing"))
+
+
+def _push_workflow_notice(context: object | None, key: str) -> None:
+    current = v010._current_deck(context)
+    if not current:
+        return
+    state = _state(*current)
+    state["message"] = _local(_core()._language(_conf()), key)
+    v010._push_state(state)
+
+
+def _start_analysis_coordinated(context) -> None:
+    current = v010._current_deck(context)
+    if current and _deck_is_materializing(*current):
+        _push_workflow_notice(context, "busy_materializing")
+        return
+    _ORIGINAL_START_ANALYSIS(context)
+
+
+def _clear_profile_coordinated(context) -> None:
+    current = v010._current_deck(context)
+    if current:
+        deck_id, deck_name = current
+        if _core()._analysis_is_running(deck_id):
+            _push_workflow_notice(context, "busy_analyzing")
+            return
+        if _deck_is_materializing(deck_id, deck_name):
+            _push_workflow_notice(context, "busy_materializing")
+            return
+    _ORIGINAL_CLEAR_PROFILE(context)
 
 
 def _description_label(text: str, parent):
@@ -345,6 +448,7 @@ def _open_settings_dialog(context: object | None = None) -> None:
         QLabel,
         QPushButton,
         QRadioButton,
+        QTabWidget,
         QVBoxLayout,
         QWidget,
         qconnect,
@@ -354,14 +458,36 @@ def _open_settings_dialog(context: object | None = None) -> None:
     conf = _conf()
     core = _core()
     action_context = context if core._is_supported_card_context(context) else v010._active_reviewer()
+    current = v010._current_deck(action_context) if action_context else None
+
     dialog = QDialog(mw)
     dialog.setWindowTitle(t(lang, "settings_title"))
-    dialog.setMinimumWidth(560)
+    dialog.setMinimumWidth(620)
+    dialog.setMinimumHeight(520)
     layout = QVBoxLayout(dialog)
-    form = QFormLayout()
 
-    def add_row(label_text: str, control, description: str) -> None:
-        wrapper = QWidget(dialog)
+    deck_group = QGroupBox(t(lang, "settings_current_deck"), dialog)
+    deck_layout = QVBoxLayout(deck_group)
+    if current:
+        deck_label = QLabel(current[1], deck_group)
+        deck_label.setWordWrap(True)
+        deck_label.setStyleSheet("font-weight: 600;")
+        deck_layout.addWidget(deck_label)
+    else:
+        deck_layout.addWidget(_description_label(t(lang, "settings_no_active_deck"), deck_group))
+    layout.addWidget(deck_group)
+
+    tabs = QTabWidget(dialog)
+    playback_tab = QWidget(tabs)
+    analysis_tab = QWidget(tabs)
+    created_tab = QWidget(tabs)
+    tabs.addTab(playback_tab, _local(lang, "tab_playback"))
+    tabs.addTab(analysis_tab, _local(lang, "tab_analysis"))
+    tabs.addTab(created_tab, _local(lang, "tab_created"))
+    layout.addWidget(tabs, 1)
+
+    def add_row(form: QFormLayout, parent: QWidget, label_text: str, control, description: str) -> None:
+        wrapper = QWidget(parent)
         wrapper_layout = QVBoxLayout(wrapper)
         wrapper_layout.setContentsMargins(0, 0, 0, 0)
         wrapper_layout.setSpacing(3)
@@ -369,15 +495,17 @@ def _open_settings_dialog(context: object | None = None) -> None:
         wrapper_layout.addWidget(_description_label(description, wrapper))
         form.addRow(label_text, wrapper)
 
-    language = QComboBox(dialog)
+    playback_layout = QVBoxLayout(playback_tab)
+    playback_form = QFormLayout()
+    language = QComboBox(playback_tab)
     language.addItem("Automático / Automatic", "auto")
     language.addItem("English", "en")
     language.addItem("Português (Brasil)", "pt-BR")
     language_index = language.findData(str(conf.get("language", "auto")))
     language.setCurrentIndex(language_index if language_index >= 0 else 0)
-    add_row(t(lang, "settings_language"), language, _local(lang, "language_hint"))
+    add_row(playback_form, playback_tab, t(lang, "settings_language"), language, _local(lang, "language_hint"))
 
-    mode_box = QWidget(dialog)
+    mode_box = QWidget(playback_tab)
     mode_layout = QHBoxLayout(mode_box)
     mode_layout.setContentsMargins(0, 0, 0, 0)
     mode_buttons: dict[str, QRadioButton] = {}
@@ -390,36 +518,57 @@ def _open_settings_dialog(context: object | None = None) -> None:
         mode_buttons[mode] = button
         mode_layout.addWidget(button)
     mode_buttons[_playback_mode(conf)].setChecked(True)
-    add_row(_local(lang, "playback_mode"), mode_box, _local(lang, "mode_hint"))
+    add_row(playback_form, playback_tab, _local(lang, "playback_mode"), mode_box, _local(lang, "mode_hint"))
 
-    target = QDoubleSpinBox(dialog)
+    overvolume = QCheckBox(_local(lang, "overvolume"), playback_tab)
+    overvolume.setChecked(bool(conf.get("overvolume_enabled", False)))
+    add_row(playback_form, playback_tab, "", overvolume, _local(lang, "overvolume_hint"))
+
+    overvolume_gain = QDoubleSpinBox(playback_tab)
+    overvolume_gain.setRange(0.0, OVERVOLUME_MAX_GAIN_DB)
+    overvolume_gain.setDecimals(1)
+    overvolume_gain.setSingleStep(0.5)
+    overvolume_gain.setSuffix(" dB")
+    overvolume_gain.setValue(_overvolume_gain_db(conf))
+    overvolume_gain.setEnabled(overvolume.isChecked())
+    add_row(
+        playback_form,
+        playback_tab,
+        _local(lang, "overvolume_gain"),
+        overvolume_gain,
+        _local(lang, "overvolume_gain_hint"),
+    )
+    qconnect(overvolume.toggled, lambda checked: overvolume_gain.setEnabled(bool(checked)))
+    playback_layout.addLayout(playback_form)
+    playback_layout.addStretch(1)
+
+    analysis_layout = QVBoxLayout(analysis_tab)
+    analysis_layout.addWidget(_description_label(_local(lang, "analysis_flow_hint"), analysis_tab))
+    analysis_form = QFormLayout()
+    target = QDoubleSpinBox(analysis_tab)
     target.setRange(-50.0, -20.0)
     target.setDecimals(0)
     target.setSingleStep(1.0)
     target.setSuffix(" LUFS")
     target.setValue(max(-50.0, min(-20.0, float(conf.get("loudness_target", -24.0)))))
-    add_row(t(lang, "target_loudness"), target, t(lang, "target_loudness_hint"))
+    add_row(analysis_form, analysis_tab, t(lang, "target_loudness"), target, t(lang, "target_loudness_hint"))
 
-    dual_mono = QCheckBox(t(lang, "dual_mono"), dialog)
+    dual_mono = QCheckBox(t(lang, "dual_mono"), analysis_tab)
     dual_mono.setChecked(bool(conf.get("dual_mono", False)))
-    add_row("", dual_mono, t(lang, "dual_mono_hint"))
+    add_row(analysis_form, analysis_tab, "", dual_mono, t(lang, "dual_mono_hint"))
 
-    backend = QComboBox(dialog)
+    backend = QComboBox(analysis_tab)
     backend.addItem(t(lang, "analysis_auto"), "auto")
     backend.addItem(t(lang, "analysis_ffmpeg"), "ffmpeg")
     backend.addItem(t(lang, "analysis_webaudio"), "webaudio")
     backend_index = backend.findData(str(conf.get("analysis_backend", "auto")))
     backend.setCurrentIndex(backend_index if backend_index >= 0 else 0)
-    add_row(t(lang, "analysis_method"), backend, _local(lang, "analysis_hint"))
+    add_row(analysis_form, analysis_tab, t(lang, "analysis_method"), backend, _local(lang, "analysis_hint"))
+    analysis_layout.addLayout(analysis_form)
 
-    insert_template = QCheckBox(t(lang, "insert_normalized_template"), dialog)
-    insert_template.setChecked(bool(conf.get("normalized_audio_insert_template", True)))
-    add_row("", insert_template, t(lang, "insert_normalized_template_hint"))
-    layout.addLayout(form)
-
-    ffmpeg_group = QGroupBox(t(lang, "settings_ffmpeg"), dialog)
+    ffmpeg_group = QGroupBox(t(lang, "settings_ffmpeg"), analysis_tab)
     ffmpeg_outer = QVBoxLayout(ffmpeg_group)
-    ffmpeg_layout = QHBoxLayout()
+    ffmpeg_row = QHBoxLayout()
     ffmpeg_state = v010._ffmpeg_state()
     ffmpeg_label = QLabel(
         t(lang, "ffmpeg_ready") if ffmpeg_state.get("available") else t(lang, "ffmpeg_missing"),
@@ -431,37 +580,52 @@ def _open_settings_dialog(context: object | None = None) -> None:
         and bool(ffmpeg_state.get("installer_available"))
         and not bool(ffmpeg_state.get("installing"))
     )
-    ffmpeg_layout.addWidget(ffmpeg_label, 1)
-    ffmpeg_layout.addWidget(install_button)
-    ffmpeg_outer.addLayout(ffmpeg_layout)
+    ffmpeg_row.addWidget(ffmpeg_label, 1)
+    ffmpeg_row.addWidget(install_button)
+    ffmpeg_outer.addLayout(ffmpeg_row)
     ffmpeg_outer.addWidget(_description_label(t(lang, "ffmpeg_installer_hint"), ffmpeg_group))
-    layout.addWidget(ffmpeg_group)
+    analysis_layout.addWidget(ffmpeg_group)
 
-    actions_group = QGroupBox(t(lang, "settings_current_deck"), dialog)
-    actions_layout = QVBoxLayout(actions_group)
-    current = v010._current_deck(action_context) if action_context else None
+    action_available = action_context is not None and current is not None
+    busy = False
     if current:
-        deck_label = QLabel(current[1], actions_group)
-        deck_label.setWordWrap(True)
-        actions_layout.addWidget(deck_label)
-    else:
-        hint = _description_label(t(lang, "settings_no_active_deck"), actions_group)
-        actions_layout.addWidget(hint)
+        busy = core._analysis_is_running(current[0]) or _deck_is_materializing(*current)
 
-    action_specs = [
-        (t(lang, "analyze_deck"), v010._start_analysis, _local(lang, "analyze_hint")),
-        (t(lang, "prepare_normalized_field"), v010._prepare_normalized_field_setup, t(lang, "prepare_normalized_field_hint")),
-        (t(lang, "materialize_audio"), v010._start_materialization, t(lang, "materialize_hint")),
-        (t(lang, "settings_clear_profile"), v010._clear_current_deck_profile, _local(lang, "clear_hint")),
-    ]
-    action_buttons: list[tuple[QPushButton, Any]] = []
-    for title, action, description in action_specs:
-        button = QPushButton(title, actions_group)
-        button.setEnabled(action_context is not None and current is not None)
-        actions_layout.addWidget(button)
-        actions_layout.addWidget(_description_label(description, actions_group))
-        action_buttons.append((button, action))
-    layout.addWidget(actions_group)
+    analyze_button = QPushButton(t(lang, "analyze_deck"), analysis_tab)
+    analyze_button.setEnabled(action_available and not busy)
+    analysis_layout.addWidget(analyze_button)
+    analysis_layout.addWidget(_description_label(_local(lang, "analyze_hint"), analysis_tab))
+
+    clear_button = QPushButton(t(lang, "settings_clear_profile"), analysis_tab)
+    clear_button.setEnabled(action_available and not busy)
+    analysis_layout.addWidget(clear_button)
+    analysis_layout.addWidget(_description_label(_local(lang, "clear_hint"), analysis_tab))
+    analysis_layout.addStretch(1)
+
+    created_layout = QVBoxLayout(created_tab)
+    created_layout.addWidget(_description_label(_local(lang, "created_flow_hint"), created_tab))
+    created_form = QFormLayout()
+    insert_template = QCheckBox(t(lang, "insert_normalized_template"), created_tab)
+    insert_template.setChecked(bool(conf.get("normalized_audio_insert_template", True)))
+    add_row(
+        created_form,
+        created_tab,
+        "",
+        insert_template,
+        t(lang, "insert_normalized_template_hint"),
+    )
+    created_layout.addLayout(created_form)
+
+    materialize_button = QPushButton(t(lang, "materialize_audio"), created_tab)
+    materialize_button.setEnabled(action_available and not busy)
+    created_layout.addWidget(materialize_button)
+    created_layout.addWidget(_description_label(t(lang, "materialize_hint"), created_tab))
+
+    prepare_button = QPushButton(t(lang, "prepare_normalized_field"), created_tab)
+    prepare_button.setEnabled(action_available and not busy)
+    created_layout.addWidget(prepare_button)
+    created_layout.addWidget(_description_label(_local(lang, "prepare_optional_hint"), created_tab))
+    created_layout.addStretch(1)
 
     def selected_mode() -> str:
         for mode, button in mode_buttons.items():
@@ -476,6 +640,10 @@ def _open_settings_dialog(context: object | None = None) -> None:
         updated["playback_mode"] = mode
         updated["normalize"] = mode == "realtime"
         updated["deck_profile_enabled"] = mode == "profile"
+        updated["overvolume_enabled"] = bool(overvolume.isChecked())
+        updated["overvolume_gain_db"] = max(
+            0.0, min(OVERVOLUME_MAX_GAIN_DB, float(overvolume_gain.value()))
+        )
         updated["loudness_target"] = float(target.value())
         updated["dual_mono"] = bool(dual_mono.isChecked())
         selected_backend = str(backend.currentData() or "auto")
@@ -506,8 +674,10 @@ def _open_settings_dialog(context: object | None = None) -> None:
         action(action_context)
 
     qconnect(install_button.clicked, install_ffmpeg_from_dialog)
-    for button, action in action_buttons:
-        qconnect(button.clicked, lambda _checked=False, current_action=action: run_action(current_action))
+    qconnect(analyze_button.clicked, lambda _checked=False: run_action(_start_analysis_coordinated))
+    qconnect(clear_button.clicked, lambda _checked=False: run_action(_clear_profile_coordinated))
+    qconnect(materialize_button.clicked, lambda _checked=False: run_action(v010._start_materialization))
+    qconnect(prepare_button.clicked, lambda _checked=False: run_action(v010._prepare_normalized_field_setup))
 
     buttons = QDialogButtonBox(
         QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
@@ -546,6 +716,28 @@ def _on_message(handled, message: str, context):
         _refresh_mode(context)
         return (True, None)
 
+    if message.startswith("ferreis_audio:v011:overvolume:"):
+        parts = message.split(":", 4)
+        if len(parts) != 5:
+            return (True, None)
+        action, raw = parts[3], parts[4]
+        conf = _conf()
+        if action == "enabled":
+            conf["overvolume_enabled"] = raw == "1"
+        elif action == "gain":
+            try:
+                gain_db = float(raw)
+            except (TypeError, ValueError):
+                return (True, None)
+            conf["overvolume_gain_db"] = max(0.0, min(OVERVOLUME_MAX_GAIN_DB, gain_db))
+        else:
+            return (True, None)
+        mw.addonManager.writeConfig(__package__, conf)
+        _refresh_mode(context)
+        return (True, None)
+
+    # Compatibilidade com versões antigas do painel. O checkbox legado fica
+    # oculto na interface atual para evitar duas fontes de verdade para o modo.
     if message.startswith("ferreis_audio:set:normalize:"):
         value = message.rsplit(":", 1)[-1] == "1"
         if value:
@@ -578,6 +770,12 @@ def _install() -> None:
     core._apply_native_settings = _apply_native_settings
     v010._state = _state
     v010._open_settings_dialog = _open_settings_dialog
+    if not hasattr(v010, "_bac_v011_original_start_analysis"):
+        setattr(v010, "_bac_v011_original_start_analysis", _ORIGINAL_START_ANALYSIS)
+    if not hasattr(v010, "_bac_v011_original_clear_profile"):
+        setattr(v010, "_bac_v011_original_clear_profile", _ORIGINAL_CLEAR_PROFILE)
+    v010._start_analysis = _start_analysis_coordinated
+    v010._clear_current_deck_profile = _clear_profile_coordinated
     if not hasattr(av_player, "_bac_v011_original_play_tags"):
         setattr(av_player, "_bac_v011_original_play_tags", _ORIGINAL_PLAY_TAGS)
     av_player.play_tags = _play_tags_without_mutating_render_cache

@@ -6,6 +6,8 @@
   "dual_mono": false,
   "speed": 1.0,
   "volume": 1.0,
+  "overvolume_enabled": false,
+  "overvolume_gain_db": 6.0,
   "deck_profile_enabled": false,
   "analysis_backend": "auto",
   "normalized_audio_insert_template": true
