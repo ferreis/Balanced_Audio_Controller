@@ -14,6 +14,10 @@ from .i18n import t
 from . import v010
 
 PLAYBACK_MODES = {"profile", "realtime", "created"}
+OVERVOLUME_FILTER_NAME = "@ferreis_overvolume"
+OVERVOLUME_DEFAULT_GAIN_DB = 6.0
+OVERVOLUME_MAX_GAIN_DB = 12.0
+OVERVOLUME_LIMIT_DB = -1.5
 
 
 def _core():
@@ -48,6 +52,40 @@ def _save_playback_mode(mode: str) -> str:
     return normalized
 
 
+def _overvolume_gain_db(conf: dict[str, Any] | None = None) -> float:
+    current = conf if conf is not None else _conf()
+    try:
+        value = float(current.get("overvolume_gain_db", OVERVOLUME_DEFAULT_GAIN_DB))
+    except (TypeError, ValueError):
+        value = OVERVOLUME_DEFAULT_GAIN_DB
+    return max(0.0, min(OVERVOLUME_MAX_GAIN_DB, value))
+
+
+def _overvolume_filter(conf: dict[str, Any]) -> str:
+    gain_db = _overvolume_gain_db(conf)
+    limit = 10.0 ** (OVERVOLUME_LIMIT_DB / 20.0)
+    return (
+        f"{OVERVOLUME_FILTER_NAME}:lavfi=["
+        f"volume={gain_db:.3f}dB,"
+        f"alimiter=limit={limit:.6f}:level=false"
+        f"]"
+    )
+
+
+def _apply_overvolume(player: Any, conf: dict[str, Any]) -> tuple[bool, float]:
+    core = _core()
+    core._remove_filter(player, OVERVOLUME_FILTER_NAME)
+    gain_db = _overvolume_gain_db(conf)
+    if not bool(conf.get("overvolume_enabled", False)) or gain_db <= 0.0:
+        return False, gain_db
+    try:
+        player.command("af", "add", _overvolume_filter(conf))
+        return True, gain_db
+    except Exception as exc:
+        print("[Balanced Audio Controller] OverVolume unavailable:", exc)
+        return False, gain_db
+
+
 def _local(lang: str, key: str, **values: Any) -> str:
     messages = {
         "en": {
@@ -59,6 +97,10 @@ def _local(lang: str, key: str, **values: Any) -> str:
             "mode_profile_hint": "Uses the gain measured for each file when the deck was analyzed. If the profile is missing or outdated, no fallback normalization is applied.",
             "mode_realtime_hint": "Normalizes the original audio while it plays using the native MPV/FFmpeg loudnorm filter.",
             "mode_created_hint": "Plays the generated bac_norm_* copy when available, removes duplicate generated tags and does not normalize it again.",
+            "overvolume": "OverVolume",
+            "overvolume_hint": "Adds extra playback gain after the selected normalization mode. Use it when audio is still too quiet at 100% volume. It never changes the media file.",
+            "overvolume_gain": "OverVolume boost",
+            "overvolume_gain_hint": "Extra gain from 0 to +12 dB. A limiter is applied afterward to reduce digital clipping; high values can make noise or existing distortion more audible.",
             "language_hint": "Automatic follows the computer language; unsupported languages use English.",
             "analysis_hint": "Automatic prefers FFmpeg and falls back to the built-in analyzer. FFmpeg is more accurate; the built-in analyzer needs no external executable.",
             "analyze_hint": "Measures the current deck and stores a per-file normalization profile.",
@@ -66,6 +108,8 @@ def _local(lang: str, key: str, **values: Any) -> str:
             "status_profile_missing": "Analyzed-profile mode · no valid gain for this audio",
             "status_profile_stale": "Analyzed-profile mode · profile is outdated; reanalyze the deck",
             "status_created_missing": "Created-audio mode · normalized copy not found; original audio is playing without runtime normalization",
+            "status_materialized_audio": "Already-normalized audio copy · normalization bypassed",
+            "status_overvolume": "OverVolume {gain:+.1f} dB",
         },
         "pt-BR": {
             "playback_mode": "Modo de reprodução",
@@ -76,6 +120,10 @@ def _local(lang: str, key: str, **values: Any) -> str:
             "mode_profile_hint": "Usa o ganho medido para cada arquivo quando o deck foi analisado. Se o perfil estiver ausente ou desatualizado, não aplica normalização alternativa.",
             "mode_realtime_hint": "Normaliza o áudio original enquanto ele toca usando o filtro loudnorm do MPV/FFmpeg nativo.",
             "mode_created_hint": "Reproduz a cópia bac_norm_* quando existir, remove tags geradas duplicadas e não normaliza essa cópia novamente.",
+            "overvolume": "OverVolume",
+            "overvolume_hint": "Adiciona ganho extra na reprodução depois do modo de normalização escolhido. Use quando o áudio continuar baixo mesmo em 100%. O arquivo de mídia nunca é alterado.",
+            "overvolume_gain": "Ganho do OverVolume",
+            "overvolume_gain_hint": "Ganho extra de 0 a +12 dB. Um limitador é aplicado depois para reduzir clipping digital; valores altos podem deixar ruído ou distorções existentes mais perceptíveis.",
             "language_hint": "Automático segue o idioma do computador; idiomas não suportados usam inglês.",
             "analysis_hint": "Automático prefere FFmpeg e usa o analisador interno como fallback. FFmpeg é mais preciso; o analisador interno não exige executável externo.",
             "analyze_hint": "Mede os áudios do deck atual e salva um perfil de normalização por arquivo.",
@@ -83,6 +131,8 @@ def _local(lang: str, key: str, **values: Any) -> str:
             "status_profile_missing": "Modo perfil analisado · não há ganho válido para este áudio",
             "status_profile_stale": "Modo perfil analisado · perfil desatualizado; reanalise o deck",
             "status_created_missing": "Modo áudios criados · cópia normalizada não encontrada; o original está tocando sem normalização em tempo real",
+            "status_materialized_audio": "Cópia de áudio já normalizada · normalização ignorada",
+            "status_overvolume": "OverVolume {gain:+.1f} dB",
         },
     }
     language = "pt-BR" if lang == "pt-BR" else "en"
@@ -283,9 +333,16 @@ def _apply_native_settings(
 
     core._remove_filter(player, core.NORMALIZE_FILTER_NAME)
     core._remove_filter(player, core.DECK_GAIN_FILTER_NAME)
+    core._remove_filter(player, OVERVOLUME_FILTER_NAME)
+
+    def finish(status: str) -> tuple[bool, str]:
+        applied, gain_db = _apply_overvolume(player, conf)
+        if applied:
+            status = f"{status} · {_local(lang, 'status_overvolume', gain=gain_db)}"
+        return True, status
 
     if core._is_materialized_audio(filename):
-        return True, t(lang, "status_materialized_audio")
+        return finish(_local(lang, "status_materialized_audio"))
 
     mode = _playback_mode(conf)
     if mode == "profile":
@@ -294,22 +351,22 @@ def _apply_native_settings(
             try:
                 gain_db = float(entry.get("gain_db", 0.0))
                 player.command("af", "add", core._deck_gain_filter(gain_db))
-                return True, t(lang, "status_deck_profile_gain", gain=gain_db)
+                return finish(t(lang, "status_deck_profile_gain", gain=gain_db))
             except Exception as exc:
                 print("[Balanced Audio Controller] unable to apply deck gain:", exc)
         if profile and not core._profile_matches_config(profile, conf):
-            return True, _local(lang, "status_profile_stale")
-        return True, _local(lang, "status_profile_missing")
+            return finish(_local(lang, "status_profile_stale"))
+        return finish(_local(lang, "status_profile_missing"))
 
     if mode == "realtime":
         try:
             player.command("af", "add", core._normalizer_filter(conf))
-            return True, t(lang, "status_realtime_normalization", prefix="", target=target)
+            return finish(t(lang, "status_realtime_normalization", prefix="", target=target))
         except Exception as exc:
             print("[Balanced Audio Controller] loudnorm unavailable:", exc)
-            return True, t(lang, "status_loudnorm_unavailable", prefix="")
+            return finish(t(lang, "status_loudnorm_unavailable", prefix=""))
 
-    return True, _local(lang, "status_created_missing")
+    return finish(_local(lang, "status_created_missing"))
 
 
 _ORIGINAL_STATE = v010._state
@@ -317,9 +374,12 @@ _ORIGINAL_STATE = v010._state
 
 def _state(deck_id: int, deck_name: str | None = None) -> dict[str, Any]:
     state = _ORIGINAL_STATE(deck_id, deck_name)
-    mode = _playback_mode()
+    conf = _conf()
+    mode = _playback_mode(conf)
     state["playback_mode"] = mode
     state["enabled"] = mode == "profile"
+    state["overvolume_enabled"] = bool(conf.get("overvolume_enabled", False))
+    state["overvolume_gain_db"] = _overvolume_gain_db(conf)
     return state
 
 
@@ -391,6 +451,20 @@ def _open_settings_dialog(context: object | None = None) -> None:
         mode_layout.addWidget(button)
     mode_buttons[_playback_mode(conf)].setChecked(True)
     add_row(_local(lang, "playback_mode"), mode_box, _local(lang, "mode_hint"))
+
+    overvolume = QCheckBox(_local(lang, "overvolume"), dialog)
+    overvolume.setChecked(bool(conf.get("overvolume_enabled", False)))
+    add_row("", overvolume, _local(lang, "overvolume_hint"))
+
+    overvolume_gain = QDoubleSpinBox(dialog)
+    overvolume_gain.setRange(0.0, OVERVOLUME_MAX_GAIN_DB)
+    overvolume_gain.setDecimals(1)
+    overvolume_gain.setSingleStep(0.5)
+    overvolume_gain.setSuffix(" dB")
+    overvolume_gain.setValue(_overvolume_gain_db(conf))
+    overvolume_gain.setEnabled(overvolume.isChecked())
+    add_row(_local(lang, "overvolume_gain"), overvolume_gain, _local(lang, "overvolume_gain_hint"))
+    qconnect(overvolume.toggled, lambda checked: overvolume_gain.setEnabled(bool(checked)))
 
     target = QDoubleSpinBox(dialog)
     target.setRange(-50.0, -20.0)
@@ -476,6 +550,10 @@ def _open_settings_dialog(context: object | None = None) -> None:
         updated["playback_mode"] = mode
         updated["normalize"] = mode == "realtime"
         updated["deck_profile_enabled"] = mode == "profile"
+        updated["overvolume_enabled"] = bool(overvolume.isChecked())
+        updated["overvolume_gain_db"] = max(
+            0.0, min(OVERVOLUME_MAX_GAIN_DB, float(overvolume_gain.value()))
+        )
         updated["loudness_target"] = float(target.value())
         updated["dual_mono"] = bool(dual_mono.isChecked())
         selected_backend = str(backend.currentData() or "auto")
@@ -543,6 +621,26 @@ def _on_message(handled, message: str, context):
         if mode not in PLAYBACK_MODES:
             return (True, None)
         _save_playback_mode(mode)
+        _refresh_mode(context)
+        return (True, None)
+
+    if message.startswith("ferreis_audio:v011:overvolume:"):
+        parts = message.split(":", 4)
+        if len(parts) != 5:
+            return (True, None)
+        action, raw = parts[3], parts[4]
+        conf = _conf()
+        if action == "enabled":
+            conf["overvolume_enabled"] = raw == "1"
+        elif action == "gain":
+            try:
+                gain_db = float(raw)
+            except (TypeError, ValueError):
+                return (True, None)
+            conf["overvolume_gain_db"] = max(0.0, min(OVERVOLUME_MAX_GAIN_DB, gain_db))
+        else:
+            return (True, None)
+        mw.addonManager.writeConfig(__package__, conf)
         _refresh_mode(context)
         return (True, None)
 
