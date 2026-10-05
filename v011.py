@@ -245,17 +245,6 @@ def _rewrite_playback_tags(tags: list[Any], deck_id: int | None) -> list[Any]:
     mapping = _available_materialized_mapping(deck_id) if mode == "created" else {}
     valid_generated = {str(name).casefold() for name in mapping.values()}
 
-    generated_present = False
-    if mode == "created" and valid_generated:
-        for candidate_tag in tags:
-            if not isinstance(candidate_tag, SoundOrVideoTag):
-                continue
-            candidate_name = str(candidate_tag.filename or "")
-            candidate_ext = candidate_name.rsplit(".", 1)[-1].lower() if "." in candidate_name else ""
-            if candidate_ext in core.AUDIO_EXTENSIONS and candidate_name.casefold() in valid_generated:
-                generated_present = True
-                break
-
     rewritten: list[Any] = []
     seen_audio: set[str] = set()
     for tag in tags:
@@ -270,13 +259,6 @@ def _rewrite_playback_tags(tags: list[Any], deck_id: int | None) -> list[Any]:
         if mode == "created" and core._is_materialized_audio(filename):
             if filename.casefold() not in valid_generated:
                 continue
-        if (
-            mode == "created"
-            and generated_present
-            and not core._is_materialized_audio(filename)
-            and filename not in mapping
-        ):
-            continue
         selected = _selected_filename(filename, mode, mapping)
         if selected is None:
             continue
