@@ -58,26 +58,55 @@ class AudioControllerV011PlaywrightTests(unittest.TestCase):
         page.wait_for_selector(".fac-playback-mode-select")
         return page
 
-    def test_mode_selector_switches_between_three_sources(self) -> None:
+    def test_panel_is_grouped_and_hides_legacy_normalization_toggle(self) -> None:
+        page = self.page_with_config(base_config())
+        try:
+            self.assertEqual(page.locator(".fac-ui-group").count(), 3)
+            self.assertEqual(
+                page.locator(".fac-ui-group-title").all_inner_texts(),
+                ["Playback", "Normalization", "Deck"],
+            )
+            self.assertTrue(page.locator(".fac-playback-group .fac-speed").is_visible())
+            self.assertTrue(page.locator(".fac-playback-group .fac-volume").is_visible())
+            self.assertTrue(page.locator(".fac-processing-group .fac-playback-mode-select").is_visible())
+            self.assertTrue(page.locator(".fac-processing-group .fac-overvolume-enabled").is_visible())
+            self.assertTrue(page.locator(".fac-deck-group .fac-analyze-deck").is_visible())
+            self.assertTrue(page.locator(".fac-normalization-block").is_hidden())
+        finally:
+            page.close()
+
+    def test_mode_selector_switches_between_three_sources_without_legacy_command(self) -> None:
         page = self.page_with_config(base_config())
         try:
             selector = page.locator(".fac-playback-mode-select")
             self.assertTrue(selector.is_visible())
             self.assertEqual(selector.input_value(), "realtime")
             self.assertEqual(selector.locator("option").count(), 3)
+            self.assertEqual(page.locator(".fac-mode-state").inner_text(), "Immediate")
 
             page.evaluate("window.__pycmdMessages=[]")
             selector.select_option("created")
-            self.assertIn(
-                "ferreis_audio:v011:mode:created",
-                page.evaluate("window.__pycmdMessages"),
-            )
+            messages = page.evaluate("window.__pycmdMessages")
+            self.assertIn("ferreis_audio:v011:mode:created", messages)
+            self.assertFalse(any(message.startswith("ferreis_audio:set:normalize:") for message in messages))
             self.assertFalse(page.locator(".fac-normalize").is_checked())
-            self.assertIn("generated normalized copy", page.locator(".fac-playback-mode-hint").inner_text())
+            self.assertEqual(page.locator(".fac-mode-state").inner_text(), "Needs copies")
+            self.assertIn("bac_norm_", page.locator(".fac-playback-mode-hint").inner_text())
 
-            page.evaluate("window.BACV010.updateState({playback_mode: 'profile'})")
+            page.evaluate(
+                "window.BACV010.updateState({playback_mode: 'profile', exists: false, stale: false})"
+            )
             self.assertEqual(selector.input_value(), "profile")
-            self.assertIn("measured", page.locator(".fac-playback-mode-hint").inner_text())
+            self.assertEqual(page.locator(".fac-mode-state").inner_text(), "Needs analysis")
+
+            page.evaluate("window.BACV010.updateState({exists: true, stale: false})")
+            self.assertEqual(page.locator(".fac-mode-state").inner_text(), "Ready")
+
+            page.evaluate(
+                "window.BACV010.updateState({playback_mode: 'created', created_ready: true})"
+            )
+            self.assertEqual(selector.input_value(), "created")
+            self.assertEqual(page.locator(".fac-mode-state").inner_text(), "Ready")
         finally:
             page.close()
 
@@ -93,7 +122,7 @@ class AudioControllerV011PlaywrightTests(unittest.TestCase):
             self.assertTrue(gain.is_disabled())
             self.assertEqual(gain.input_value(), "6")
             self.assertEqual(value.inner_text(), "+6.0 dB")
-            self.assertIn("still too quiet", page.locator(".fac-overvolume-hint").inner_text())
+            self.assertIn("100%", page.locator(".fac-overvolume-hint").inner_text())
 
             page.evaluate("window.__pycmdMessages=[]")
             enabled.check()
@@ -126,6 +155,23 @@ class AudioControllerV011PlaywrightTests(unittest.TestCase):
         finally:
             page.close()
 
+    def test_analysis_button_is_disabled_during_analysis_or_audio_generation(self) -> None:
+        page = self.page_with_config(base_config())
+        try:
+            analyze = page.locator(".fac-analyze-deck")
+            self.assertFalse(analyze.is_disabled())
+
+            page.evaluate("window.BACV010.updateState({materializing: true, analyzing: false})")
+            self.assertTrue(analyze.is_disabled())
+
+            page.evaluate("window.BACV010.updateState({materializing: false, analyzing: true})")
+            self.assertTrue(analyze.is_disabled())
+
+            page.evaluate("window.BACV010.updateState({materializing: false, analyzing: false})")
+            self.assertFalse(analyze.is_disabled())
+        finally:
+            page.close()
+
     def test_mode_selector_is_rebound_after_front_back_render(self) -> None:
         config = base_config()
         config.update({"surface": "previewer", "side": "question"})
@@ -147,6 +193,8 @@ class AudioControllerV011PlaywrightTests(unittest.TestCase):
             page.wait_for_selector(".fac-playback-mode-select")
             self.assertEqual(page.locator(".fac-playback-mode-select").count(), 1)
             self.assertEqual(page.locator(".fac-overvolume-block").count(), 1)
+            self.assertEqual(page.locator(".fac-ui-group").count(), 3)
+            self.assertTrue(page.locator(".fac-normalization-block").is_hidden())
             self.assertTrue(
                 page.evaluate(
                     "window.BACV011.root === document.getElementById('ferreis-audio-controller')"
