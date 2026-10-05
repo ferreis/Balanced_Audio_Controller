@@ -48,6 +48,10 @@ class PlaybackModeTests(unittest.TestCase):
         self.assertEqual(playback_mode({"playback_mode": "profile"}), "profile")
         self.assertEqual(playback_mode({"playback_mode": "realtime"}), "realtime")
         self.assertEqual(playback_mode({"playback_mode": "created"}), "created")
+        self.assertEqual(
+            playback_mode({"playback_mode": "realtime", "deck_profile_enabled": True, "normalize": False}),
+            "realtime",
+        )
         self.assertEqual(playback_mode({"deck_profile_enabled": True, "normalize": True}), "profile")
         self.assertEqual(playback_mode({"deck_profile_enabled": False, "normalize": True}), "realtime")
         self.assertEqual(playback_mode({"deck_profile_enabled": False, "normalize": False}), "created")
@@ -195,7 +199,7 @@ class PlaybackModeTests(unittest.TestCase):
             "_copy_sound_tag": lambda tag, filename: FakeTag(filename),
         }
 
-    def test_created_mode_keeps_render_cache_unchanged(self) -> None:
+    def test_created_mode_without_valid_mapping_falls_back_to_original_without_mutation(self) -> None:
         rewrite = load_function("_rewrite_playback_tags", self._rewrite_namespace({}))
         tags = [FakeTag("voice.mp3"), FakeTag("bac_norm_1234_voice.m4a")]
         original_ids = [id(tag) for tag in tags]
@@ -207,26 +211,45 @@ class PlaybackModeTests(unittest.TestCase):
             ["voice.mp3", "bac_norm_1234_voice.m4a"],
         )
         self.assertEqual([id(tag) for tag in tags], original_ids)
-        self.assertEqual(
-            [tag.filename for tag in rewritten],
-            ["bac_norm_1234_voice.m4a"],
-        )
+        self.assertEqual([tag.filename for tag in rewritten], ["voice.mp3"])
 
-    def test_created_mode_deduplicates_copy_without_mutating_source(self) -> None:
+    def test_created_mode_deduplicates_only_current_generated_copy(self) -> None:
         mapping = {"voice.mp3": "bac_norm_1234_voice.m4a"}
         rewrite = load_function("_rewrite_playback_tags", self._rewrite_namespace(mapping))
-        tags = [FakeTag("voice.mp3"), FakeTag("bac_norm_1234_voice.m4a")]
+        tags = [
+            FakeTag("voice.mp3"),
+            FakeTag("bac_norm_1234_voice.m4a"),
+            FakeTag("bac_norm_old_voice.m4a"),
+        ]
 
         rewritten = rewrite(tags, 1)
 
         self.assertEqual(
             [tag.filename for tag in tags],
-            ["voice.mp3", "bac_norm_1234_voice.m4a"],
+            ["voice.mp3", "bac_norm_1234_voice.m4a", "bac_norm_old_voice.m4a"],
         )
-        self.assertEqual(
-            [tag.filename for tag in rewritten],
-            ["bac_norm_1234_voice.m4a"],
-        )
+        self.assertEqual([tag.filename for tag in rewritten], ["bac_norm_1234_voice.m4a"])
+
+    def test_analysis_is_blocked_while_normalized_audio_is_being_created(self) -> None:
+        calls: list[str] = []
+        notices: list[str] = []
+        ns = {
+            "v010": SimpleNamespace(_current_deck=lambda _context: (7, "Deck")),
+            "_deck_is_materializing": lambda *_args: True,
+            "_push_workflow_notice": lambda _context, key: notices.append(key),
+            "_ORIGINAL_START_ANALYSIS": lambda _context: calls.append("analysis"),
+        }
+        coordinated = load_function("_start_analysis_coordinated", ns)
+
+        coordinated(object())
+
+        self.assertEqual(calls, [])
+        self.assertEqual(notices, ["busy_materializing"])
+
+        ns["_deck_is_materializing"] = lambda *_args: False
+        coordinated = load_function("_start_analysis_coordinated", ns)
+        coordinated(object())
+        self.assertEqual(calls, ["analysis"])
 
     def test_player_wrapper_delegates_copy_and_preserves_clicked_tag_list(self) -> None:
         delegated: list[list[str]] = []
@@ -249,6 +272,7 @@ class PlaybackModeTests(unittest.TestCase):
 
     def test_security_and_cache_guards_are_present(self) -> None:
         self.assertIn("candidate.relative_to(media_root)", SOURCE)
+        self.assertIn("core._profile_matches_config(profile, _conf())", SOURCE)
         self.assertNotIn("shell=True", SOURCE)
         self.assertNotIn("tags[:] = rewritten", SOURCE)
         self.assertNotIn("gui_hooks.av_player_will_play_tags.append", SOURCE)
@@ -257,6 +281,8 @@ class PlaybackModeTests(unittest.TestCase):
         self.assertIn("OVERVOLUME_MAX_GAIN_DB = 12.0", SOURCE)
         self.assertIn("alimiter=limit=", SOURCE)
         self.assertIn("level=false", SOURCE)
+        self.assertIn("v010._start_analysis = _start_analysis_coordinated", SOURCE)
+        self.assertIn("v010._clear_current_deck_profile = _clear_profile_coordinated", SOURCE)
 
 
 if __name__ == "__main__":
