@@ -28,6 +28,18 @@ class FakeTag:
         self.filename = filename
 
 
+class FakePlayer:
+    def __init__(self) -> None:
+        self.commands: list[tuple[Any, ...]] = []
+        self.properties: list[tuple[str, float]] = []
+
+    def set_property(self, name: str, value: float) -> None:
+        self.properties.append((name, value))
+
+    def command(self, *args: Any) -> None:
+        self.commands.append(tuple(args))
+
+
 class PlaybackModeTests(unittest.TestCase):
     def test_explicit_and_legacy_modes(self) -> None:
         ns = {"Any": Any, "PLAYBACK_MODES": {"profile", "realtime", "created"}, "_conf": lambda: {}}
@@ -39,6 +51,98 @@ class PlaybackModeTests(unittest.TestCase):
         self.assertEqual(playback_mode({"deck_profile_enabled": True, "normalize": True}), "profile")
         self.assertEqual(playback_mode({"deck_profile_enabled": False, "normalize": True}), "realtime")
         self.assertEqual(playback_mode({"deck_profile_enabled": False, "normalize": False}), "created")
+
+    def test_overvolume_gain_is_clamped_and_filter_has_limiter(self) -> None:
+        ns = {
+            "Any": Any,
+            "OVERVOLUME_DEFAULT_GAIN_DB": 6.0,
+            "OVERVOLUME_MAX_GAIN_DB": 12.0,
+            "OVERVOLUME_FILTER_NAME": "@ferreis_overvolume",
+            "OVERVOLUME_LIMIT_DB": -1.5,
+            "_conf": lambda: {},
+        }
+        gain = load_function("_overvolume_gain_db", ns)
+        ns["_overvolume_gain_db"] = gain
+        overvolume_filter = load_function("_overvolume_filter", ns)
+
+        self.assertEqual(gain({"overvolume_gain_db": -5}), 0.0)
+        self.assertEqual(gain({"overvolume_gain_db": 99}), 12.0)
+        self.assertEqual(gain({"overvolume_gain_db": "invalid"}), 6.0)
+
+        filter_spec = overvolume_filter({"overvolume_gain_db": 99})
+        self.assertIn("@ferreis_overvolume:lavfi=[", filter_spec)
+        self.assertIn("volume=12.000dB", filter_spec)
+        self.assertIn("alimiter=limit=0.841395", filter_spec)
+        self.assertIn("level=false", filter_spec)
+
+    def test_overvolume_is_removed_when_disabled_and_added_when_enabled(self) -> None:
+        player = FakePlayer()
+        core = SimpleNamespace(
+            _remove_filter=lambda current, name: current.command("af", "remove", name)
+        )
+        ns = {
+            "Any": Any,
+            "_core": lambda: core,
+            "OVERVOLUME_FILTER_NAME": "@ferreis_overvolume",
+            "_overvolume_gain_db": lambda conf: max(0.0, min(12.0, float(conf.get("overvolume_gain_db", 6.0)))),
+            "_overvolume_filter": lambda conf: "@ferreis_overvolume:lavfi=[volume=6.000dB,alimiter=limit=0.841395:level=false]",
+        }
+        apply_overvolume = load_function("_apply_overvolume", ns)
+
+        applied, gain = apply_overvolume(player, {"overvolume_enabled": False, "overvolume_gain_db": 6})
+        self.assertFalse(applied)
+        self.assertEqual(gain, 6.0)
+        self.assertEqual(player.commands, [("af", "remove", "@ferreis_overvolume")])
+
+        player.commands.clear()
+        applied, gain = apply_overvolume(player, {"overvolume_enabled": True, "overvolume_gain_db": 6})
+        self.assertTrue(applied)
+        self.assertEqual(gain, 6.0)
+        self.assertEqual(player.commands[0], ("af", "remove", "@ferreis_overvolume"))
+        self.assertEqual(player.commands[1][0:2], ("af", "add"))
+        self.assertIn("volume=6.000dB", player.commands[1][2])
+
+    def test_overvolume_is_appended_after_realtime_normalization(self) -> None:
+        player = FakePlayer()
+        core = SimpleNamespace(
+            _language=lambda _conf: "en",
+            _is_mpv_player=lambda _player: True,
+            _current_audio_filename=lambda: "voice.mp3",
+            _remove_filter=lambda current, name: current.command("af", "remove", name),
+            NORMALIZE_FILTER_NAME="@normalize",
+            DECK_GAIN_FILTER_NAME="@deck",
+            _is_materialized_audio=lambda _filename: False,
+            _normalizer_filter=lambda _conf: "@normalize:lavfi=[loudnorm]",
+        )
+
+        def apply_boost(current: FakePlayer, _conf: dict[str, Any]):
+            current.command("af", "add", "@ferreis_overvolume:lavfi=[volume=6dB,alimiter]")
+            return True, 6.0
+
+        ns = {
+            "Any": Any,
+            "_core": lambda: core,
+            "_conf": lambda: {
+                "speed": 1.0,
+                "volume": 1.0,
+                "loudness_target": -24,
+                "overvolume_enabled": True,
+            },
+            "av_player": SimpleNamespace(current_player=player),
+            "t": lambda _lang, key, **_values: key,
+            "OVERVOLUME_FILTER_NAME": "@ferreis_overvolume",
+            "_apply_overvolume": apply_boost,
+            "_local": lambda _lang, key, **_values: key,
+            "_playback_mode": lambda _conf: "realtime",
+        }
+        apply_native = load_function("_apply_native_settings", ns)
+
+        supported, _status = apply_native(player=player, filename="voice.mp3", deck_id=1)
+
+        self.assertTrue(supported)
+        filters_added = [command[2] for command in player.commands if command[:2] == ("af", "add")]
+        self.assertEqual(filters_added[0], "@normalize:lavfi=[loudnorm]")
+        self.assertTrue(filters_added[1].startswith("@ferreis_overvolume:"))
 
     def test_generated_filename_rejects_path_traversal(self) -> None:
         core = SimpleNamespace(
@@ -150,6 +254,9 @@ class PlaybackModeTests(unittest.TestCase):
         self.assertNotIn("gui_hooks.av_player_will_play_tags.append", SOURCE)
         self.assertIn("_ORIGINAL_PLAY_TAGS(rewritten)", SOURCE)
         self.assertIn("av_player.play_tags = _play_tags_without_mutating_render_cache", SOURCE)
+        self.assertIn("OVERVOLUME_MAX_GAIN_DB = 12.0", SOURCE)
+        self.assertIn("alimiter=limit=", SOURCE)
+        self.assertIn("level=false", SOURCE)
 
 
 if __name__ == "__main__":
