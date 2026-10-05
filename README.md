@@ -1,4 +1,4 @@
-# Balanced Audio Controller v0.10.0
+# Balanced Audio Controller v1.1.0
 
 Free and open-source audio controller for Anki Desktop. It keeps Anki's native MPV playback while adding speed, volume, loudness normalization, persistent per-deck audio profiles, optional FFmpeg installation, a built-in analyzer that works without FFmpeg, and a minimizable floating panel.
 
