@@ -75,6 +75,42 @@ class AudioControllerV011PlaywrightTests(unittest.TestCase):
         finally:
             page.close()
 
+    def test_mode_selector_has_readable_dark_surface_and_text(self) -> None:
+        page = self.page_with_config(base_config())
+        try:
+            selector = page.locator(".fac-playback-mode-select")
+            selector_style = selector.evaluate(
+                """el => {
+                    const style = getComputedStyle(el);
+                    return {
+                        color: style.color,
+                        backgroundColor: style.backgroundColor,
+                        textFillColor: style.webkitTextFillColor,
+                        colorScheme: style.colorScheme,
+                    };
+                }"""
+            )
+            self.assertEqual(selector_style["backgroundColor"], "rgb(31, 34, 40)")
+            self.assertEqual(selector_style["color"], "rgb(232, 233, 236)")
+            self.assertEqual(selector_style["textFillColor"], "rgb(232, 233, 236)")
+            self.assertIn("dark", selector_style["colorScheme"])
+
+            option_style = selector.locator("option").first.evaluate(
+                """el => {
+                    const style = getComputedStyle(el);
+                    return {
+                        color: style.color,
+                        backgroundColor: style.backgroundColor,
+                        textFillColor: style.webkitTextFillColor,
+                    };
+                }"""
+            )
+            self.assertEqual(option_style["backgroundColor"], "rgb(31, 34, 40)")
+            self.assertEqual(option_style["color"], "rgb(232, 233, 236)")
+            self.assertEqual(option_style["textFillColor"], "rgb(232, 233, 236)")
+        finally:
+            page.close()
+
     def test_mode_selector_switches_between_three_sources_without_legacy_command(self) -> None:
         page = self.page_with_config(base_config())
         try:
