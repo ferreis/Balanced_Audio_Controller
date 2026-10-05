@@ -1,4 +1,6 @@
 (() => {
+  const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
   const ext = window.BACV011 || {
     root: null,
     state: {},
@@ -18,6 +20,9 @@
           hint_profile: "Uses the gain measured for each audio file in the analyzed deck profile.",
           hint_realtime: "Normalizes the original audio while it plays.",
           hint_created: "Uses the generated normalized copy and avoids applying normalization twice.",
+          overvolume: "OverVolume",
+          overvolume_gain: "Extra gain",
+          overvolume_hint: "Use when audio is still too quiet at 100%. Adds playback-only gain after normalization and uses a limiter to reduce clipping.",
         },
         "pt-BR": {
           title: "Modo de reprodução",
@@ -27,6 +32,9 @@
           hint_profile: "Usa o ganho medido para cada arquivo no perfil analisado do deck.",
           hint_realtime: "Normaliza o áudio original enquanto ele toca.",
           hint_created: "Usa a cópia normalizada gerada e evita aplicar normalização duas vezes.",
+          overvolume: "OverVolume",
+          overvolume_gain: "Ganho extra",
+          overvolume_hint: "Use quando o áudio continuar baixo mesmo em 100%. Adiciona ganho somente na reprodução depois da normalização e usa um limitador para reduzir clipping.",
         },
       };
       return dictionary[this.language()][key] || key;
@@ -57,13 +65,99 @@
           color: var(--fac-text);
           font: inherit;
         }
-        #ferreis-audio-controller .fac-playback-mode-hint {
+        #ferreis-audio-controller .fac-playback-mode-hint,
+        #ferreis-audio-controller .fac-overvolume-hint {
           color: var(--fac-muted);
           font-size: 11px;
           line-height: 1.35;
         }
+        #ferreis-audio-controller .fac-overvolume-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+        }
+        #ferreis-audio-controller .fac-overvolume-value {
+          color: var(--fac-text);
+          font-variant-numeric: tabular-nums;
+          white-space: nowrap;
+        }
+        #ferreis-audio-controller .fac-overvolume-gain:disabled {
+          opacity: 0.4;
+        }
       `;
       document.head.appendChild(style);
+    },
+
+    installOverVolume() {
+      if (!this.root || this.root.querySelector(".fac-overvolume-block")) return;
+      const volume = this.root.querySelector(".fac-volume");
+      const anchor = volume?.closest(".fac-block");
+      if (!anchor || !anchor.parentNode) return;
+
+      const section = document.createElement("section");
+      section.className = "fac-block fac-overvolume-block";
+      section.innerHTML = `
+        <div class="fac-overvolume-head">
+          <label class="fac-check-row" title="${this.text("overvolume_hint")}">
+            <input class="fac-overvolume-enabled" type="checkbox">
+            <span>${this.text("overvolume")}</span>
+          </label>
+          <span class="fac-overvolume-value">+6.0 dB</span>
+        </div>
+        <div class="fac-row fac-row-label"><span>${this.text("overvolume_gain")}</span></div>
+        <input class="fac-overvolume-gain" type="range" min="0" max="12" step="0.5" value="6" aria-label="${this.text("overvolume_gain")}">
+        <div class="fac-overvolume-hint">${this.text("overvolume_hint")}</div>
+      `;
+      anchor.insertAdjacentElement("afterend", section);
+
+      const enabled = section.querySelector(".fac-overvolume-enabled");
+      const gain = section.querySelector(".fac-overvolume-gain");
+
+      enabled.addEventListener("change", () => {
+        this.state.overvolume_enabled = Boolean(enabled.checked);
+        this.syncOverVolume();
+        pycmd(`ferreis_audio:v011:overvolume:enabled:${enabled.checked ? 1 : 0}`);
+      });
+
+      gain.addEventListener("input", () => {
+        const value = clamp(Number(gain.value || 0), 0, 12);
+        this.state.overvolume_gain_db = value;
+        this.syncOverVolume();
+        pycmd(`ferreis_audio:v011:overvolume:gain:${value}`);
+      });
+    },
+
+    syncOverVolume() {
+      if (!this.root) return;
+      const base = window.FerreisAnkiAudio;
+      const hasEnabled = Object.prototype.hasOwnProperty.call(this.state, "overvolume_enabled");
+      const hasGain = Object.prototype.hasOwnProperty.call(this.state, "overvolume_gain_db");
+      const enabled = hasEnabled
+        ? Boolean(this.state.overvolume_enabled)
+        : Boolean(base?.config?.overvolume_enabled ?? false);
+      const rawGain = hasGain
+        ? Number(this.state.overvolume_gain_db)
+        : Number(base?.config?.overvolume_gain_db ?? 6);
+      const gainDb = clamp(Number.isFinite(rawGain) ? rawGain : 6, 0, 12);
+
+      this.state.overvolume_enabled = enabled;
+      this.state.overvolume_gain_db = gainDb;
+
+      const checkbox = this.root.querySelector(".fac-overvolume-enabled");
+      const slider = this.root.querySelector(".fac-overvolume-gain");
+      const value = this.root.querySelector(".fac-overvolume-value");
+      if (checkbox) checkbox.checked = enabled;
+      if (slider) {
+        slider.value = String(gainDb);
+        slider.disabled = !enabled;
+      }
+      if (value) value.textContent = `+${gainDb.toFixed(1)} dB`;
+
+      if (base?.config) {
+        base.config.overvolume_enabled = enabled;
+        base.config.overvolume_gain_db = gainDb;
+      }
     },
 
     installModeSelector() {
@@ -116,12 +210,15 @@
       this.root = root;
       this.mountedRoot = root;
       this.installStyles();
+      this.installOverVolume();
       this.installModeSelector();
+      this.syncOverVolume();
       this.syncMode();
     },
 
     updateState(state) {
       this.state = { ...this.state, ...(state || {}) };
+      this.syncOverVolume();
       this.syncMode();
     },
 
